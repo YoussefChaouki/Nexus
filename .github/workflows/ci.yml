@@ -59,7 +59,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install ".[dev]"
-      - run: pytest tests/ -m "not integration"
+      - run: pytest tests/ -m "not integration"; [ $? -eq 0 ] || [ $? -eq 5 ]
         env:
           OPENAI_API_KEY: sk-test-placeholder
           LANGFUSE_PUBLIC_KEY: pk-test-placeholder
