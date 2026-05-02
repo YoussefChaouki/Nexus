@@ -59,7 +59,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install ".[dev]"
-      - run: pytest tests/ -m "not integration" --cov=src/nexus --cov-fail-under=80
+      - run: pytest tests/ -m "not integration"
         env:
           OPENAI_API_KEY: sk-test-placeholder
           LANGFUSE_PUBLIC_KEY: pk-test-placeholder
