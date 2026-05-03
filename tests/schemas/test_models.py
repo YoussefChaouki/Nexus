@@ -78,7 +78,9 @@ def critic_report_approve(research_task: ResearchTask) -> CriticReport:
 
 
 @pytest.fixture
-def threat_report(threat_surface: ThreatSurface, critic_report_approve: CriticReport) -> ThreatReport:
+def threat_report(
+    threat_surface: ThreatSurface, critic_report_approve: CriticReport
+) -> ThreatReport:
     return ThreatReport(
         target_description="FastAPI + pgvector RAG pipeline",
         threat_surfaces=[threat_surface],
