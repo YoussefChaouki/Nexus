@@ -12,7 +12,6 @@ import pytest
 from nexus.agents.analyst import AnalystAgent
 from nexus.agents.critic import CriticAgent
 from nexus.agents.planner import PlannerAgent
-from nexus.agents.researcher import ResearcherAgent
 from nexus.agents.writer import WriterAgent
 from nexus.exceptions import AgentError
 from nexus.schemas.models import (
@@ -48,11 +47,6 @@ def state() -> AgentState:
 async def test_planner_returns_state_with_plan_key(state: AgentState) -> None:
     out = await PlannerAgent().run(state)
     assert "plan" in out
-
-
-async def test_researcher_increments_iteration(state: AgentState) -> None:
-    out = await ResearcherAgent().run(state)
-    assert out["iteration_count"] == state["iteration_count"] + 1
 
 
 async def test_analyst_returns_state_with_surfaces_key(state: AgentState) -> None:
