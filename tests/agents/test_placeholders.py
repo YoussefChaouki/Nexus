@@ -1,15 +1,14 @@
 """Smoke tests for the agent nodes that still ship the Sprint 1 placeholder.
 
-Analyst and Critic gain dedicated test suites in later sprints; until
-then these tests verify their placeholder run() methods stay wired into
-the LangGraph skeleton.
+Critic gains a dedicated test suite in a later sprint; until then this
+test verifies its placeholder run() method stays wired into the
+LangGraph skeleton.
 """
 
 from typing import cast
 
 import pytest
 
-from nexus.agents.analyst import AnalystAgent
 from nexus.agents.critic import CriticAgent
 from nexus.schemas.models import (
     AgentState,
@@ -35,11 +34,6 @@ def state() -> AgentState:
             "should_continue": True,
         },
     )
-
-
-async def test_analyst_returns_state_with_surfaces_key(state: AgentState) -> None:
-    out = await AnalystAgent().run(state)
-    assert "threat_surfaces" in out
 
 
 async def test_critic_produces_critic_report(state: AgentState) -> None:
