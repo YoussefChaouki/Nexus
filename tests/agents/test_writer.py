@@ -7,10 +7,12 @@ tests never touch Postgres. The embed function is a no-op returning a
 
 from __future__ import annotations
 
+import time
 from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
+from langchain_core.messages import AIMessage, HumanMessage
 
 from nexus.agents.writer import WriterAgent
 from nexus.exceptions import AgentError, MemoryLayerError
@@ -33,10 +35,15 @@ from nexus.schemas.models import (
 # --------------------------------------------------------------------------
 
 
-def _finding(task_id: str, ident: str = "arxiv:1") -> FindingResult:
+def _finding(
+    task_id: str,
+    ident: str = "arxiv:1",
+    *,
+    source: SourceType = SourceType.ARXIV,
+) -> FindingResult:
     return FindingResult(
         task_id=task_id,
-        source_type=SourceType.ARXIV,
+        source_type=source,
         title="Some paper",
         summary="A summary that is long enough to satisfy the validator.",
         relevance_score=0.7,
@@ -77,20 +84,26 @@ def _state(
     critic: CriticReport | None,
     plan: list[ResearchTask] | None = None,
     iteration_count: int = 1,
+    findings: list[FindingResult] | None = None,
+    messages: list | None = None,
+    session_start_time: float | None = None,
 ) -> AgentState:
     return cast(
         AgentState,
         {
-            "messages": [],
+            "messages": messages if messages is not None else [],
             "target_description": "FastAPI + pgvector RAG",
             "session_id": "test-writer",
             "plan": plan or [_task(), _task(FocusArea.SUPPLY_CHAIN)],
-            "findings": [_finding("task-1")],
+            "findings": findings if findings is not None else [_finding("task-1")],
             "threat_surfaces": surfaces or [],
             "critic_report": critic,
             "threat_report": None,
             "iteration_count": iteration_count,
             "should_continue": True,
+            "session_start_time": (
+                session_start_time if session_start_time is not None else time.time()
+            ),
         },
     )
 
@@ -122,6 +135,103 @@ async def test_writer_assembles_threat_report() -> None:
     assert report.iteration_count == 1
     assert report.metadata["surface_count"] == 2
     assert report.metadata["finding_count"] == 1
+
+
+async def test_metadata_contains_token_count() -> None:
+    surfaces = [_surface("Prompt Injection", Severity.HIGH, ["x"])]
+    messages = [
+        HumanMessage(content="Analyse the architecture for prompt injection risks."),
+        AIMessage(content="Identified two attack vectors in the RAG retrieval layer."),
+    ]
+    state = _state(surfaces=surfaces, critic=_critic(), messages=messages)
+
+    out = await WriterAgent().run(state)
+    assert out["threat_report"].metadata["total_tokens"] > 0  # type: ignore[union-attr]
+
+
+async def test_metadata_token_count_zero_for_empty_messages() -> None:
+    surfaces = [_surface("Prompt Injection", Severity.HIGH, ["x"])]
+    state = _state(surfaces=surfaces, critic=_critic(), messages=[])
+
+    out = await WriterAgent().run(state)
+    assert out["threat_report"].metadata["total_tokens"] == 0  # type: ignore[union-attr]
+
+
+async def test_metadata_contains_cost() -> None:
+    surfaces = [_surface("Prompt Injection", Severity.HIGH, ["x"])]
+    # ~ a few hundred tokens of content guarantees a non-zero cost.
+    messages = [
+        HumanMessage(content="Describe prompt injection threats. " * 40),
+        AIMessage(content="Here is a detailed answer with attack vectors. " * 40),
+    ]
+    state = _state(surfaces=surfaces, critic=_critic(), messages=messages)
+
+    out = await WriterAgent().run(state)
+    metadata = out["threat_report"].metadata  # type: ignore[union-attr]
+    assert metadata["estimated_cost_usd"] > 0.0
+    # GPT-4o pricing: input $5/1M, output $15/1M with 70/30 split → $8/1M average.
+    expected = metadata["total_tokens"] * 8.0 / 1_000_000
+    assert metadata["estimated_cost_usd"] == pytest.approx(expected, rel=1e-3)
+
+
+async def test_metadata_contains_latency() -> None:
+    surfaces = [_surface("Prompt Injection", Severity.HIGH, ["x"])]
+    # session_start_time well in the past so latency is clearly > 0.
+    state = _state(
+        surfaces=surfaces,
+        critic=_critic(),
+        session_start_time=time.time() - 1.5,
+    )
+
+    out = await WriterAgent().run(state)
+    latency = out["threat_report"].metadata["latency_seconds"]  # type: ignore[union-attr]
+    assert latency >= 1.5
+    assert latency < 60  # sanity ceiling
+
+
+async def test_metadata_latency_zero_when_session_start_time_unset() -> None:
+    surfaces = [_surface("Prompt Injection", Severity.HIGH, ["x"])]
+    state = _state(surfaces=surfaces, critic=_critic(), session_start_time=0.0)
+
+    out = await WriterAgent().run(state)
+    assert out["threat_report"].metadata["latency_seconds"] == 0.0  # type: ignore[union-attr]
+
+
+async def test_metadata_source_breakdown() -> None:
+    surfaces = [_surface("Prompt Injection", Severity.HIGH, ["x"])]
+    findings = [
+        _finding("task-1", "arxiv:1", source=SourceType.ARXIV),
+        _finding("task-1", "arxiv:2", source=SourceType.ARXIV),
+        _finding("task-1", "cve-1", source=SourceType.NVD),
+        _finding("task-1", "atlas-1", source=SourceType.ATLAS),
+        _finding("task-1", "atlas-2", source=SourceType.ATLAS),
+        _finding("task-1", "atlas-3", source=SourceType.ATLAS),
+    ]
+    state = _state(surfaces=surfaces, critic=_critic(), findings=findings)
+
+    out = await WriterAgent().run(state)
+    breakdown = out["threat_report"].metadata["source_breakdown"]  # type: ignore[union-attr]
+    assert breakdown == {"arxiv": 2, "nvd": 1, "atlas": 3, "web": 0}
+
+
+async def test_episodic_memory_persisted() -> None:
+    surfaces = [_surface("Prompt Injection", Severity.HIGH, ["x"])]
+    state = _state(surfaces=surfaces, critic=_critic())
+    memory = AsyncMock()
+    memory.store = AsyncMock()
+    agent = WriterAgent(episodic_memory=memory, embed_fn=_embed)
+
+    await agent.run(state)
+    memory.store.assert_awaited_once()
+
+
+async def test_missing_episodic_memory_doesnt_raise() -> None:
+    surfaces = [_surface("Prompt Injection", Severity.HIGH, ["x"])]
+    state = _state(surfaces=surfaces, critic=_critic())
+    agent = WriterAgent(episodic_memory=None, embed_fn=None)
+
+    out = await agent.run(state)
+    assert out["threat_report"] is not None
 
 
 async def test_writer_persists_summary_via_episodic_memory() -> None:
