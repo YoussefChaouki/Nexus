@@ -14,19 +14,24 @@ Pipeline:
 
 from __future__ import annotations
 
+import time
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, cast
+
+import tiktoken
 
 from nexus.agents.base import AgentBase
 from nexus.exceptions import AgentError, MemoryLayerError
 from nexus.memory.episodic import EpisodicMemory
 from nexus.schemas.models import (
     AgentState,
+    FindingResult,
     FocusArea,
     ResearchTask,
     Severity,
+    SourceType,
     ThreatReport,
     ThreatReportSummary,
     ThreatSurface,
@@ -35,6 +40,16 @@ from nexus.schemas.models import (
 EmbedFn = Callable[[str], Awaitable[list[float]]]
 
 _MAX_TOP_VECTORS = 5
+
+# GPT-4o pricing per 1M tokens — input vs. output. Will be replaced by
+# Langfuse-reported real token counts in S6.T1.
+_GPT4O_INPUT_USD_PER_1M = 5.00
+_GPT4O_OUTPUT_USD_PER_1M = 15.00
+_INPUT_RATIO = 0.70  # conservative split until Langfuse provides exact counts
+_OUTPUT_RATIO = 1.0 - _INPUT_RATIO
+
+_ENCODING_NAME = "cl100k_base"  # matches GPT-4o
+_encoding = tiktoken.get_encoding(_ENCODING_NAME)
 
 
 class WriterAgent(AgentBase):
@@ -89,6 +104,11 @@ class WriterAgent(AgentBase):
         target_description: str,
     ) -> None:
         if self._episodic_memory is None or self._embed_fn is None:
+            self._logger.warning(
+                "episodic_memory_not_configured",
+                session_id=summary.session_id,
+                detail="skipping summary persistence",
+            )
             return
         try:
             embedding = await self._embed_fn(target_description)
@@ -105,15 +125,52 @@ class WriterAgent(AgentBase):
 
 
 def _build_metadata(state: AgentState) -> dict[str, Any]:
-    """Compute a small metadata dict (approximate token count + cardinalities)."""
-    messages_chars = sum(len(str(getattr(m, "content", ""))) for m in state["messages"])
-    approx_tokens = messages_chars // 4  # conservative chars→tokens heuristic
+    """Compute a metadata dict with token/cost/latency/source telemetry.
+
+    Token counts ignore per-message overhead; pricing splits 70/30 between
+    input and output. Real per-call accounting lands in S6.T1 via Langfuse.
+    """
+    total_tokens = _count_message_tokens(state["messages"])
     return {
-        "approx_tokens": approx_tokens,
+        "total_tokens": total_tokens,
+        "estimated_cost_usd": _estimate_cost_usd(total_tokens),
+        "latency_seconds": _latency_seconds(state),
+        "source_breakdown": _source_breakdown(state["findings"]),
         "iteration_count": state["iteration_count"],
         "finding_count": len(state["findings"]),
         "surface_count": len(state["threat_surfaces"]),
     }
+
+
+def _count_message_tokens(messages: list[Any]) -> int:
+    total = 0
+    for msg in messages:
+        content = getattr(msg, "content", "")
+        if not content:
+            continue
+        total += len(_encoding.encode(str(content)))
+    return total
+
+
+def _estimate_cost_usd(total_tokens: int) -> float:
+    input_tokens = total_tokens * _INPUT_RATIO
+    output_tokens = total_tokens * _OUTPUT_RATIO
+    cost = (
+        input_tokens * _GPT4O_INPUT_USD_PER_1M + output_tokens * _GPT4O_OUTPUT_USD_PER_1M
+    ) / 1_000_000
+    return round(cost, 6)
+
+
+def _latency_seconds(state: AgentState) -> float:
+    start = state.get("session_start_time", 0.0) or 0.0
+    if start <= 0.0:
+        return 0.0
+    return round(max(0.0, time.time() - start), 4)
+
+
+def _source_breakdown(findings: list[FindingResult]) -> dict[str, int]:
+    counter: Counter[str] = Counter(f.source_type.value for f in findings)
+    return {src.value: counter.get(src.value, 0) for src in SourceType}
 
 
 def _summary_from_report(

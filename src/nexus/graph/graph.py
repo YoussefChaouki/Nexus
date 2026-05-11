@@ -1,5 +1,6 @@
 """LangGraph pipeline construction and execution entry point."""
 
+import time
 from typing import Any, cast
 from uuid import uuid4
 
@@ -90,6 +91,7 @@ async def run_pipeline(
         "threat_report": None,
         "iteration_count": 0,
         "should_continue": True,
+        "session_start_time": time.time(),
     }
     config = {"configurable": {"thread_id": resolved_id}}
 

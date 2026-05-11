@@ -181,6 +181,7 @@ class AgentState(TypedDict):
     threat_report: ThreatReport | None
     iteration_count: int
     should_continue: bool
+    session_start_time: float
 
 
 # ---------------------------------------------------------------------------
