@@ -5,6 +5,7 @@ from typing import Any, cast
 from uuid import uuid4
 
 import structlog
+from langchain_core.messages import HumanMessage
 
 from nexus.agents.analyst import AnalystAgent
 from nexus.agents.critic import CriticAgent
@@ -81,7 +82,7 @@ async def run_pipeline(
     compiled = build_graph(checkpointer)
 
     initial_state: AgentState = {
-        "messages": [],
+        "messages": [HumanMessage(content=target_description)],
         "target_description": target_description,
         "session_id": resolved_id,
         "plan": [],

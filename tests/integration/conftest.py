@@ -1,13 +1,20 @@
-"""Fixtures for the partial pipeline integration tests.
+"""Fixtures for the integration test suite.
 
-These fixtures stand in for the real LLM and MCP transport while still
-exercising the actual LangGraph nodes and Pydantic schemas. Two fakes
+These fakes stand in for the real LLM and MCP transport while still
+exercising the actual LangGraph nodes and Pydantic schemas. Three fakes
 are provided:
 
 * :class:`_FakeRoutingLLM` — routes a single ``ainvoke`` entry point to
   three different responses (Planner / Analyst / scoring) based on the
   prompt content. The Analyst branch reads the ``Focus area:`` line of
   the prompt so each focus_area group gets a distinct ThreatSurface.
+
+* :class:`ContextAwareMockLLM` — :class:`_FakeRoutingLLM` plus full
+  Critic support: a queue of :class:`Recommendation` values drives the
+  ``recommendation`` field of each :class:`CriticReport`, while
+  ``agent_calls`` records the sequence of nodes that invoked the LLM
+  (``planner`` / ``researcher_scoring`` / ``analyst`` / ``critic``).
+  Used by the Sprint 5 end-to-end pipeline tests.
 
 * :class:`_FakeMCPClient` — returns canned JSON arrays per
   ``(server_name, query)`` pair. ``error_servers`` makes a server raise
@@ -117,6 +124,104 @@ class _FakeRoutingLLM:
             return _FakeResp(json.dumps(_analyst_payload(focus, severity)))
         # Researcher relevance scoring or anything else.
         return _FakeResp("0.7")
+
+
+# --------------------------------------------------------------------------
+# Context-aware mock LLM (Sprint 5 end-to-end)
+# --------------------------------------------------------------------------
+
+
+# Imported lazily to keep this module light when only _FakeRoutingLLM is used.
+from nexus.agents.critic import OWASP_LLM_TOP10  # noqa: E402
+from nexus.schemas.models import FocusArea, Recommendation  # noqa: E402
+
+
+class ContextAwareMockLLM(_FakeRoutingLLM):
+    """End-to-end mock LLM with critic + scoring routing.
+
+    Extends :class:`_FakeRoutingLLM` with:
+
+    * a :class:`Recommendation` queue that drives each Critic evaluation
+      (one element popped per evaluation prompt);
+    * structured tracking via ``agent_calls`` so tests can assert which
+      pipeline nodes invoked the LLM and in what order;
+    * a deterministic researcher-scoring response (``"0.85"``) tagged
+      ``researcher_scoring`` in ``agent_calls``;
+    * a Critic filter response that marks every OWASP category as
+      applicable, so the threshold maths is predictable across tests.
+
+    Args:
+        recommendations: Recommendations consumed in order, one per
+            Critic evaluation. The default ``[APPROVE]`` is enough for
+            the single-iteration test.
+    """
+
+    def __init__(self, recommendations: list[Recommendation] | None = None) -> None:
+        super().__init__()
+        self._recs: list[Recommendation] = list(
+            recommendations if recommendations is not None else [Recommendation.APPROVE]
+        )
+        self.agent_calls: list[str] = []
+        self.critic_eval_calls: int = 0
+        self.critic_filter_calls: int = 0
+
+    async def ainvoke(self, prompt: str, **kwargs: Any) -> _FakeResp:
+        if "senior AI security auditor" in prompt:
+            self.critic_eval_calls += 1
+            self.agent_calls.append("critic")
+            if not self._recs:
+                raise RuntimeError(
+                    "ContextAwareMockLLM exhausted — enqueue more recommendations "
+                    "(at least max_iterations elements)",
+                )
+            rec = self._recs.pop(0)
+            return _FakeResp(_critic_eval_payload(rec, self.critic_eval_calls))
+        if "OWASP LLM Top 10 catalogue" in prompt:
+            self.critic_filter_calls += 1
+            # Mark every category applicable so the score arithmetic in the
+            # Critic prompt is fully driven by the queued recommendation.
+            return _FakeResp(json.dumps(list(OWASP_LLM_TOP10)))
+        if "Planner agent" in prompt:
+            self.agent_calls.append("planner")
+        elif "Analyst agent" in prompt:
+            self.agent_calls.append("analyst")
+        else:
+            # Researcher relevance scoring — single-number response.
+            self.agent_calls.append("researcher_scoring")
+        return await super().ainvoke(prompt, **kwargs)
+
+
+def _critic_eval_payload(rec: Recommendation, call_index: int) -> str:
+    """Build a JSON CriticReport that satisfies the Pydantic validator.
+
+    The ``call_index`` is woven into the re-research task's search query
+    so successive iterations dispatch *new* MCP queries instead of
+    hitting the Researcher's dedup cache.
+    """
+    if rec == Recommendation.RE_RESEARCH:
+        body: dict[str, Any] = {
+            "overall_score": 0.45,
+            "gaps": ["LLM10 not covered"],
+            "bias_warnings": [],
+            "recommendation": rec.value,
+            "re_research_tasks": [
+                {
+                    "description": "Investigate model extraction attacks against the LLM API.",
+                    "focus_area": FocusArea.MODEL_EXTRACTION.value,
+                    "priority": "high",
+                    "search_queries": [f"model extraction follow-up iter{call_index}"],
+                },
+            ],
+        }
+    else:
+        body = {
+            "overall_score": 0.85,
+            "gaps": [],
+            "bias_warnings": [],
+            "recommendation": rec.value,
+            "re_research_tasks": [],
+        }
+    return json.dumps(body)
 
 
 # --------------------------------------------------------------------------
