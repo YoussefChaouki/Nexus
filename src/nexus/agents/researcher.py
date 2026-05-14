@@ -20,6 +20,7 @@ from typing import Any, cast
 from nexus.agents.base import AgentBase
 from nexus.exceptions import AgentError, MCPClientError
 from nexus.mcp import MCPClient
+from nexus.observability.langfuse import start_span
 from nexus.schemas.models import (
     AgentState,
     FindingResult,
@@ -63,35 +64,54 @@ class ResearcherAgent(AgentBase):
                 zero findings (existing + new).
         """
         self._log_start(state)
+        # Stashed for ``_default_score`` so the LLM scoring call inherits
+        # the same Langfuse callbacks/metadata as the other agents.
+        self._active_state: AgentState | None = state
         tasks = self._tasks_to_research(state)
         if not tasks:
             raise AgentError("ResearcherAgent: no research tasks to execute")
 
-        client = self._mcp_client or MCPClient()
-        owns_client = self._mcp_client is None
-        try:
-            raw_findings = await self._gather_findings(tasks, client)
-        finally:
-            if owns_client:
-                await client.aclose()
-
-        scored = await self._score_findings(tasks, raw_findings)
-        merged = _dedup(list(state["findings"]) + scored)
-
-        if not merged:
-            raise AgentError(
-                "ResearcherAgent produced zero findings; cannot proceed",
-            )
-
-        per_source = Counter(f.source_type.value for f in scored)
-        self._logger.info(
-            "researcher_done",
+        with start_span(
+            "nexus/researcher",
             session_id=state["session_id"],
-            tasks_researched=len(tasks),
-            new_findings=len(scored),
-            total_findings=len(merged),
-            per_source=dict(per_source),
-        )
+            metadata={
+                "agent": self.agent_name,
+                "iteration": state["iteration_count"],
+                "task_count": len(tasks),
+            },
+        ) as span:
+            client = self._mcp_client or MCPClient()
+            owns_client = self._mcp_client is None
+            try:
+                raw_findings = await self._gather_findings(tasks, client)
+            finally:
+                if owns_client:
+                    await client.aclose()
+
+            scored = await self._score_findings(tasks, raw_findings)
+            merged = _dedup(list(state["findings"]) + scored)
+
+            if not merged:
+                raise AgentError(
+                    "ResearcherAgent produced zero findings; cannot proceed",
+                )
+
+            per_source = Counter(f.source_type.value for f in scored)
+            self._logger.info(
+                "researcher_done",
+                session_id=state["session_id"],
+                tasks_researched=len(tasks),
+                new_findings=len(scored),
+                total_findings=len(merged),
+                per_source=dict(per_source),
+            )
+            span.update(
+                output={
+                    "findings_count": len(merged),
+                    "new_findings": len(scored),
+                    "sources": dict(per_source),
+                },
+            )
 
         return cast(
             AgentState,
@@ -224,7 +244,7 @@ class ResearcherAgent(AgentBase):
             f"Reply with only a number between 0.0 and 1.0."
         )
         try:
-            response = await llm.ainvoke(prompt)
+            response = await llm.ainvoke(prompt, config=self._scoring_config(task, finding))
         except Exception:
             return 0.5
         text = str(getattr(response, "content", response)).strip()
@@ -232,6 +252,25 @@ class ResearcherAgent(AgentBase):
             return float(text)
         except ValueError:
             return 0.5
+
+    def _scoring_config(self, task: ResearchTask, finding: FindingResult) -> dict[str, Any]:
+        """Build Langfuse config for the relevance-scoring LLM call.
+
+        Falls back to a minimal config when ``run()`` has not seeded
+        ``_active_state`` (e.g. unit tests calling ``_default_score``
+        directly).
+        """
+        state = getattr(self, "_active_state", None)
+        if state is None:
+            return {}
+        return self._invoke_config(
+            state,
+            step="score_finding",
+            extra_metadata={
+                "task_id": task.id,
+                "source_type": finding.source_type.value,
+            },
+        )
 
 
 # --- helpers ---------------------------------------------------------------

@@ -87,7 +87,7 @@ class AnalystAgent(AgentBase):
         surfaces: list[ThreatSurface] = []
         for focus_area, findings in groups.items():
             patterns = await self._fetch_patterns(findings)
-            surface = await self._synthesise(focus_area, findings, patterns)
+            surface = await self._synthesise(focus_area, findings, patterns, state)
             surfaces.append(surface)
             self._logger.info(
                 "analyst_group_done",
@@ -126,13 +126,25 @@ class AnalystAgent(AgentBase):
         focus_area: FocusArea,
         findings: list[FindingResult],
         patterns: list[ThreatPattern],
+        state: AgentState,
     ) -> ThreatSurface:
         prompt = self._build_prompt(focus_area, findings, patterns)
         self.last_prompts.append(prompt)
 
         llm = self._llm or self._get_llm()
         try:
-            response = await llm.ainvoke(prompt)
+            response = await llm.ainvoke(
+                prompt,
+                config=self._invoke_config(
+                    state,
+                    step="synthesise",
+                    extra_metadata={
+                        "focus_area": focus_area.value,
+                        "finding_count": len(findings),
+                        "pattern_count": len(patterns),
+                    },
+                ),
+            )
         except Exception as exc:
             raise AgentError(f"Analyst LLM call failed: {exc}") from exc
 

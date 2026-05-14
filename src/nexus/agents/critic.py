@@ -111,8 +111,9 @@ class CriticAgent(AgentBase):
     # ----- Langfuse ---------------------------------------------------------
 
     def _callbacks(self, state: AgentState) -> list[Any]:
-        handler = get_langfuse_handler(state["session_id"])
-        return [handler] if handler is not None else []
+        # Override the base helper so tests can patch the critic-local
+        # ``get_langfuse_handler`` symbol (the existing critic suite does).
+        return [get_langfuse_handler(state["session_id"])]
 
     def _config(self, callbacks: list[Any], iteration: int, step: str) -> dict[str, Any]:
         return {
