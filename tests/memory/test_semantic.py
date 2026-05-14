@@ -49,3 +49,15 @@ async def test_search_patterns_maps_rows_to_models() -> None:
     result = await mem.search_patterns([0.1] * 1536, limit=1)
     assert len(result) == 1
     assert result[0].pattern_id == "LLM01"
+
+
+async def test_search_patterns_returns_empty_when_no_rows_match() -> None:
+    """When the DB returns no matching patterns, the result is empty.
+
+    This is the runtime analogue of "no patterns above similarity
+    threshold": pgvector's ``ORDER BY embedding <=> $1`` over an empty
+    qualifying set yields zero rows.
+    """
+    mem = SemanticMemory(pool=_pool_with_rows([]))
+    result = await mem.search_patterns([0.5] * 1536, limit=5)
+    assert result == []
