@@ -37,5 +37,25 @@ services:
       redis:
         condition: service_healthy
 
+  # One-shot ingestion: runs scripts/ingest_patterns.py against the
+  # local Postgres to populate the Threat Pattern Library. Gated behind
+  # the "setup" profile so a regular `docker compose up` does not pay
+  # for OpenAI embedding calls on every boot. Invoke explicitly:
+  #     docker compose --profile setup up init
+  init:
+    image: python:3.11-slim
+    working_dir: /app
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    command: >
+      sh -c "pip install --quiet -e . &&
+             python scripts/ingest_patterns.py"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: ["setup"]
+
 volumes:
   postgres_data:
