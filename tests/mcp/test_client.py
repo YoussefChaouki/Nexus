@@ -141,3 +141,39 @@ async def test_aclose_clears_pool() -> None:
 
     assert client._sessions == {}  # type: ignore[attr-defined]
     assert client._exit_stacks == {}  # type: ignore[attr-defined]
+
+
+async def test_async_context_manager_closes_pool() -> None:
+    """Using MCPClient as ``async with`` must drain sessions on exit."""
+    client = MCPClient()
+    _inject(client, "arxiv", _FakeSession())
+    async with client as bound:
+        assert bound is client
+        assert client._sessions  # type: ignore[attr-defined]
+    assert client._sessions == {}  # type: ignore[attr-defined]
+
+
+async def test_aclose_swallows_stack_close_errors() -> None:
+    """A failing AsyncExitStack must not propagate out of aclose()."""
+    from contextlib import AsyncExitStack
+    from unittest.mock import AsyncMock
+
+    client = MCPClient()
+    stack = AsyncExitStack()
+    stack.aclose = AsyncMock(side_effect=RuntimeError("boom"))  # type: ignore[method-assign]
+    client._exit_stacks["arxiv"] = stack  # type: ignore[assignment]
+    client._sessions["arxiv"] = _FakeSession()  # type: ignore[assignment]
+
+    # Must not raise; pool is cleared regardless of the stack failure.
+    await client.aclose()
+    assert client._sessions == {}  # type: ignore[attr-defined]
+
+
+async def test_envelope_check_ignores_non_json_payload() -> None:
+    """When the tool returns plain text, the envelope check must not raise."""
+    client = MCPClient()
+    _inject(client, "atlas", _FakeSession(response_text="not-json-at-all"))
+
+    raw = await client.call_tool("atlas", "search_techniques", query="x")
+
+    assert raw == "not-json-at-all"
