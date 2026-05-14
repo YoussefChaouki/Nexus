@@ -11,9 +11,10 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr
     anthropic_api_key: SecretStr | None = None
 
-    # Observability
-    langfuse_public_key: SecretStr
-    langfuse_secret_key: SecretStr
+    # Observability — credentials optional: when missing the
+    # observability layer falls back to a NullCallbackHandler.
+    langfuse_public_key: SecretStr | None = None
+    langfuse_secret_key: SecretStr | None = None
     langfuse_host: str = "https://cloud.langfuse.com"
 
     # Infrastructure

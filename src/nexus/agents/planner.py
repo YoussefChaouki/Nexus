@@ -65,7 +65,7 @@ class PlannerAgent(AgentBase):
         self._log_start(state)
         target = state["target_description"]
         episodic_context = await self._fetch_episodic_context(target)
-        tasks = await self._generate_plan(target, episodic_context)
+        tasks = await self._generate_plan(target, episodic_context, state)
 
         if not (_MIN_TASKS <= len(tasks) <= _MAX_TASKS):
             raise AgentError(
@@ -99,13 +99,23 @@ class PlannerAgent(AgentBase):
         self,
         target: str,
         episodic_context: list[ThreatReportSummary],
+        state: AgentState,
     ) -> list[ResearchTask]:
         prompt = self._build_prompt(target, episodic_context)
         self.last_prompt = prompt
 
         llm = self._llm or self._get_llm()
         try:
-            response = await llm.ainvoke(prompt)
+            response = await llm.ainvoke(
+                prompt,
+                config=self._invoke_config(
+                    state,
+                    step="generate_plan",
+                    extra_metadata={
+                        "episodic_context_count": len(episodic_context),
+                    },
+                ),
+            )
         except Exception as exc:
             raise AgentError(f"Planner LLM call failed: {exc}") from exc
 

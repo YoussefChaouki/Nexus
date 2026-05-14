@@ -5,6 +5,7 @@ from typing import Any
 
 import structlog
 
+from nexus.observability.langfuse import get_langfuse_handler
 from nexus.schemas.models import AgentState
 from nexus.settings import get_settings
 
@@ -24,8 +25,8 @@ class AgentBase(ABC):
         contamination when imported at the top of this file, making AgentBase
         appear as Any to subclasses. Lazy import isolates the side-effect.
 
-        Langfuse callbacks are attached at invocation time via:
-            llm.ainvoke(messages, config={"callbacks": [get_langfuse_handler(session_id)]})
+        Langfuse callbacks are attached at invocation time via
+        :meth:`_invoke_config`.
         """
         from langchain_openai import ChatOpenAI  # lazy: keeps module types clean
 
@@ -34,6 +35,44 @@ class AgentBase(ABC):
             model=settings.llm_model,
             openai_api_key=settings.openai_api_key.get_secret_value(),
         )
+
+    # ----- Langfuse instrumentation helpers -------------------------------
+
+    def _callbacks(self, state: AgentState) -> list[Any]:
+        """Return the callback list to pass to ``llm.ainvoke(config=...)``.
+
+        Always returns a single-element list with either the real Langfuse
+        handler or :class:`NullCallbackHandler` — never an empty list — so
+        Langfuse instrumentation is uniform across iterations and agents.
+        """
+        return [get_langfuse_handler(state["session_id"])]
+
+    def _invoke_config(
+        self,
+        state: AgentState,
+        *,
+        step: str,
+        callbacks: list[Any] | None = None,
+        extra_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Build the ``config`` kwarg for an instrumented LLM call.
+
+        Standardises the metadata schema (``agent``, ``iteration``,
+        ``step``, ``session_id``) so Langfuse traces share a single
+        attribute vocabulary across nodes.
+        """
+        metadata: dict[str, Any] = {
+            "agent": self.agent_name,
+            "iteration": state["iteration_count"],
+            "step": step,
+            "session_id": state["session_id"],
+        }
+        if extra_metadata:
+            metadata.update(extra_metadata)
+        return {
+            "callbacks": callbacks if callbacks is not None else self._callbacks(state),
+            "metadata": metadata,
+        }
 
     def _log_start(self, state: AgentState) -> None:
         """Emit a structured entry log at the start of agent execution."""

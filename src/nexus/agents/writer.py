@@ -25,6 +25,7 @@ import tiktoken
 from nexus.agents.base import AgentBase
 from nexus.exceptions import AgentError, MemoryLayerError
 from nexus.memory.episodic import EpisodicMemory
+from nexus.observability.langfuse import start_span
 from nexus.schemas.models import (
     AgentState,
     FindingResult,
@@ -80,21 +81,36 @@ class WriterAgent(AgentBase):
         if not state["threat_surfaces"]:
             raise AgentError("WriterAgent requires at least one ThreatSurface")
 
-        report = ThreatReport(
-            target_description=state["target_description"],
-            created_at=datetime.now(UTC),
-            threat_surfaces=list(state["threat_surfaces"]),
-            critic_report=critic_report,
-            iteration_count=max(1, state["iteration_count"]),
-            metadata=_build_metadata(state),
-        )
-
-        summary = _summary_from_report(
-            report,
+        with start_span(
+            "nexus/writer",
             session_id=state["session_id"],
-            plan=list(state["plan"]),
-        )
-        await self._persist_summary(summary, report.target_description)
+            metadata={
+                "agent": self.agent_name,
+                "iteration": state["iteration_count"],
+            },
+        ) as span:
+            report = ThreatReport(
+                target_description=state["target_description"],
+                created_at=datetime.now(UTC),
+                threat_surfaces=list(state["threat_surfaces"]),
+                critic_report=critic_report,
+                iteration_count=max(1, state["iteration_count"]),
+                metadata=_build_metadata(state),
+            )
+
+            summary = _summary_from_report(
+                report,
+                session_id=state["session_id"],
+                plan=list(state["plan"]),
+            )
+            await self._persist_summary(summary, report.target_description)
+            span.update(
+                output={
+                    "report_id": report.id,
+                    "surface_count": len(report.threat_surfaces),
+                    "iteration_count": report.iteration_count,
+                },
+            )
 
         return cast(AgentState, {**state, "threat_report": report})
 
