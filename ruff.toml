@@ -6,3 +6,9 @@ ignore = ["E501"]
 
 [lint.isort]
 known-first-party = ["nexus"]
+
+[lint.per-file-ignores]
+# FastAPI's canonical dependency-injection pattern uses ``Depends(...)``
+# as a default argument; B008 (no function calls in defaults) is the
+# wrong rule for that idiom.
+"src/nexus/api/*" = ["B008"]
