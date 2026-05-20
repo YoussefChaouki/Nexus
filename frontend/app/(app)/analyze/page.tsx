@@ -27,7 +27,7 @@ export default function HomePage() {
         </h1>
         <p className="text-fg-muted text-[14.5px] leading-[1.7] max-w-[720px] mt-ds-3">
           Multi-agent threat-surface analyzer for AI deployments. Describe the
-          target system below — the Planner decomposes it into focus areas, the
+          target system below : the Planner decomposes it into focus areas, the
           Researcher pulls evidence from arxiv / NVD / ATLAS, the Analyst scores
           surfaces, the Critic challenges the result, and the Writer ships the
           final report. Hairlines and monospace all the way down.
