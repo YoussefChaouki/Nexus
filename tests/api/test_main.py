@@ -74,7 +74,8 @@ def test_post_analyze_returns_report(
     runner.assert_awaited_once()
     args, kwargs = runner.call_args
     assert args[0] == "FastAPI + pgvector RAG over OpenAI, no auth."
-    assert kwargs == {"session_id": "sess-abc"}
+    assert kwargs["session_id"] == "sess-abc"
+    assert "pg_pool" in kwargs  # forwarded so Writer can persist the summary
 
 
 def test_post_analyze_generates_session_id_when_omitted(
@@ -145,7 +146,11 @@ def test_get_analyze_stream_emits_sse_events() -> None:
         ),
     ]
 
-    async def fake_stream(target: str, session_id: str | None = None) -> AsyncIterator[AgentEvent]:
+    async def fake_stream(
+        target: str,
+        session_id: str | None = None,
+        pg_pool: Any = None,  # forwarded from the endpoint
+    ) -> AsyncIterator[AgentEvent]:
         assert target == "Architecture description meeting the length minimum for SSE."
         for event in events:
             yield event
@@ -227,6 +232,43 @@ def test_get_report_returns_404_when_pool_unavailable() -> None:
     client = _build_client(pg_pool=None)
     response = client.get("/report/missing")
     assert response.status_code == 404
+
+
+def test_get_report_serves_from_cache_when_pool_unavailable(
+    sample_threat_report: Callable[..., Any],
+) -> None:
+    """Writer-populated cache serves /report/{id} even with no pgvector pool."""
+    from nexus.agents.writer import _summary_from_report
+    from nexus.memory.report_cache import get_report_cache
+
+    report = sample_threat_report()
+    summary = _summary_from_report(report, session_id="sess-x", plan=[])
+    get_report_cache().put(summary)
+
+    client = _build_client(pg_pool=None)
+    response = client.get(f"/report/{summary.id}")
+
+    assert response.status_code == 200
+    assert response.json()["id"] == summary.id
+
+
+def test_get_report_prefers_cache_over_pool(
+    sample_threat_report: Callable[..., Any],
+) -> None:
+    """Cache hits short-circuit the pgvector lookup."""
+    from nexus.agents.writer import _summary_from_report
+    from nexus.memory.report_cache import get_report_cache
+
+    report = sample_threat_report()
+    summary = _summary_from_report(report, session_id="sess-y", plan=[])
+    get_report_cache().put(summary)
+
+    pool = _pool_with_row(None)  # would 404 if reached
+    client = _build_client(pg_pool=pool)
+    response = client.get(f"/report/{summary.id}")
+
+    assert response.status_code == 200
+    assert response.json()["id"] == summary.id
 
 
 # ---------------------------------------------------------------------------

@@ -33,6 +33,7 @@ from nexus.exceptions import AgentError
 from nexus.graph.graph import run_pipeline
 from nexus.graph.streaming import stream_pipeline_events
 from nexus.memory.episodic import EpisodicMemory
+from nexus.memory.report_cache import get_report_cache
 from nexus.memory.working import check_redis_health
 from nexus.schemas.models import AgentEvent, AnalyzeRequest, ThreatReport, ThreatReportSummary
 
@@ -70,7 +71,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             import asyncpg
 
             pg_pool = await asyncpg.create_pool(
-                dsn=settings.postgres_dsn,
+                dsn=_to_asyncpg_dsn(settings.postgres_dsn),
                 min_size=1,
                 max_size=5,
             )
@@ -149,6 +150,7 @@ def create_app() -> FastAPI:
     async def analyze(
         request: AnalyzeRequest,
         runner: Any = Depends(get_pipeline_runner),
+        pool: Any = Depends(get_pg_pool),
     ) -> ThreatReport:
         """Run the pipeline end-to-end and return the final report."""
         session_id = request.session_id or str(uuid4())
@@ -156,6 +158,7 @@ def create_app() -> FastAPI:
             return await runner(  # type: ignore[no-any-return]
                 request.target_description,
                 session_id=session_id,
+                pg_pool=pool,
             )
         except AgentError as exc:
             logger.warning(
@@ -176,12 +179,13 @@ def create_app() -> FastAPI:
         target_description: str = Query(..., min_length=20, max_length=2000),
         session_id: str | None = Query(default=None),
         streamer: Any = Depends(get_pipeline_streamer),
+        pool: Any = Depends(get_pg_pool),
     ) -> StreamingResponse:
         """Stream pipeline progress as Server-Sent Events."""
         resolved_id = session_id or str(uuid4())
 
         async def event_source() -> AsyncIterator[bytes]:
-            async for event in streamer(target_description, session_id=resolved_id):
+            async for event in streamer(target_description, session_id=resolved_id, pg_pool=pool):
                 yield _format_sse(event)
 
         return StreamingResponse(
@@ -200,24 +204,27 @@ def create_app() -> FastAPI:
         report_id: str,
         pool: Any = Depends(get_pg_pool),
     ) -> ThreatReportSummary:
-        """Fetch a previously persisted ``ThreatReportSummary``.
+        """Fetch a ``ThreatReportSummary`` by id.
 
-        Returns 404 when no row matches or when episodic memory is not
-        currently reachable.
+        Resolution order:
+            1. Process-local cache populated by the writer on every run —
+               survives pgvector outages and missing OpenAI embeddings.
+            2. Episodic memory in pgvector — the durable backing store.
+
+        Returns 404 only when both layers miss.
         """
-        if pool is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="report not found",
-            )
-        memory = EpisodicMemory(pool=pool)
-        summary = await memory.get_by_id(report_id)
-        if summary is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="report not found",
-            )
-        return summary
+        cached = get_report_cache().get(report_id)
+        if cached is not None:
+            return cached
+        if pool is not None:
+            memory = EpisodicMemory(pool=pool)
+            persisted = await memory.get_by_id(report_id)
+            if persisted is not None:
+                return persisted
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="report not found",
+        )
 
     # ----- GET /health ----------------------------------------------------
 
@@ -268,6 +275,17 @@ def _format_sse(event: AgentEvent) -> bytes:
     """Encode an :class:`AgentEvent` as an SSE ``data:`` frame."""
     payload = event.model_dump(mode="json")
     return f"data: {json.dumps(payload)}\n\n".encode()
+
+
+def _to_asyncpg_dsn(dsn: str) -> str:
+    """Strip SQLAlchemy-style driver suffix that asyncpg doesn't accept.
+
+    Settings stores ``postgresql+asyncpg://…`` to document the intended
+    driver, but :func:`asyncpg.create_pool` only understands ``postgresql://``
+    or ``postgres://``. Normalising here keeps the canonical form in
+    ``.env`` while still booting the pool.
+    """
+    return dsn.replace("postgresql+asyncpg://", "postgresql://", 1)
 
 
 # Module-level app instance for ``uvicorn nexus.api.main:app``.

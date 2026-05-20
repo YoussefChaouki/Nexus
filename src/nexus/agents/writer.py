@@ -25,6 +25,7 @@ import tiktoken
 from nexus.agents.base import AgentBase
 from nexus.exceptions import AgentError, MemoryLayerError
 from nexus.memory.episodic import EpisodicMemory
+from nexus.memory.report_cache import get_report_cache
 from nexus.observability.langfuse import start_span
 from nexus.schemas.models import (
     AgentState,
@@ -103,6 +104,10 @@ class WriterAgent(AgentBase):
                 session_id=state["session_id"],
                 plan=list(state["plan"]),
             )
+            # Always populate the in-process cache before attempting durable
+            # persistence — guarantees /report/{id} can serve the just-finished
+            # run even when pgvector or the embedding API is unreachable.
+            get_report_cache().put(summary)
             await self._persist_summary(summary, report.target_description)
             span.update(
                 output={

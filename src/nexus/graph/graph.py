@@ -15,29 +15,41 @@ from nexus.agents.writer import WriterAgent
 from nexus.exceptions import AgentError
 from nexus.graph.edges import route_after_critic
 from nexus.graph.state import AgentState
+from nexus.memory.embeddings import get_openai_embed_fn
+from nexus.memory.episodic import EpisodicMemory
 from nexus.schemas.models import ThreatReport
 
 logger = structlog.get_logger(__name__)
 
 
-def build_graph(checkpointer: Any = None) -> Any:  # noqa: ANN401
+def build_graph(
+    checkpointer: Any = None,  # noqa: ANN401
+    pg_pool: Any = None,  # noqa: ANN401
+) -> Any:  # noqa: ANN401
     """Compile and return the NEXUS StateGraph.
 
     Args:
         checkpointer: Optional LangGraph checkpointer (e.g. AsyncRedisSaver).
             Justified Any: CompiledStateGraph has no stable public import across
             LangGraph minor versions.
+        pg_pool: Optional asyncpg pool. When provided, Planner (episodic
+            lookup) and Writer (summary persistence) are wired up against
+            it; otherwise both fall back to in-memory no-op behaviour and
+            no ``ThreatReportSummary`` is written.
 
     Returns:
         Compiled StateGraph ready for ainvoke.
     """
     from langgraph.graph import END, StateGraph
 
-    planner = PlannerAgent()
+    episodic = EpisodicMemory(pool=pg_pool) if pg_pool is not None else None
+    embed_fn = get_openai_embed_fn() if pg_pool is not None else None
+
+    planner = PlannerAgent(episodic_memory=episodic, embed_fn=embed_fn)
     researcher = ResearcherAgent()
     analyst = AnalystAgent()
     critic = CriticAgent()
-    writer = WriterAgent()
+    writer = WriterAgent(episodic_memory=episodic, embed_fn=embed_fn)
 
     graph: StateGraph = StateGraph(AgentState)  # type: ignore[type-arg]
     graph.add_node("planner", planner.run)
@@ -64,6 +76,7 @@ async def run_pipeline(
     target_description: str,
     session_id: str | None = None,
     checkpointer: Any = None,  # noqa: ANN401
+    pg_pool: Any = None,  # noqa: ANN401
 ) -> ThreatReport:
     """Execute the full NEXUS pipeline and return a ThreatReport.
 
@@ -79,7 +92,7 @@ async def run_pipeline(
         AgentError: If the pipeline completes without generating a report.
     """
     resolved_id = session_id or str(uuid4())
-    compiled = build_graph(checkpointer)
+    compiled = build_graph(checkpointer, pg_pool=pg_pool)
 
     initial_state: AgentState = {
         "messages": [HumanMessage(content=target_description)],
