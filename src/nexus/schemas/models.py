@@ -103,6 +103,23 @@ class ThreatSurface(BaseModel):
     cvss_score: float | None = Field(default=None, ge=0.0, le=10.0)
     owasp_category: str | None = None
 
+    @field_validator("attack_vectors", "mitigations", mode="before")
+    @classmethod
+    def _coerce_str_list(cls, v: Any) -> Any:
+        """Tolerate LLMs that emit a single string instead of a list.
+
+        Splits on newlines / bullets when present, otherwise wraps as a
+        single-item list. Real list inputs pass through unchanged.
+        """
+        if isinstance(v, str):
+            for sep in ("\n- ", "\n* ", "\n• ", "\n"):
+                if sep in v:
+                    parts = [p.strip(" \t-*•") for p in v.split(sep)]
+                    return [p for p in parts if p]
+            stripped = v.strip()
+            return [stripped] if stripped else []
+        return v
+
     @model_validator(mode="after")
     def require_evidence(self) -> "ThreatSurface":
         """Ensure at least one FindingResult is attached as evidence."""
