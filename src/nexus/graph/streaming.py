@@ -53,6 +53,7 @@ async def stream_pipeline_events(
     target_description: str,
     session_id: str | None = None,
     checkpointer: Any = None,  # noqa: ANN401
+    pg_pool: Any = None,  # noqa: ANN401
 ) -> AsyncIterator[AgentEvent]:
     """Yield AgentEvent objects as the pipeline progresses.
 
@@ -78,7 +79,7 @@ async def stream_pipeline_events(
         payload={"target_description": target_description[:200]},
     )
 
-    compiled = build_graph(checkpointer)
+    compiled = build_graph(checkpointer, pg_pool=pg_pool)
     config = {"configurable": {"thread_id": resolved_id}}
 
     try:

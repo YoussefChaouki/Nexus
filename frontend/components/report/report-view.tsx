@@ -11,6 +11,7 @@ import { MetaChip } from "./meta-chip";
 import { SurfaceList } from "./surface-list";
 import type { ThreatReportSummary } from "@/lib/schemas";
 import { shortId } from "@/lib/format";
+import { langfuseTraceUrl } from "@/lib/langfuse";
 
 interface Props {
   report: ThreatReportSummary;
@@ -31,6 +32,7 @@ export function ReportView({ report }: Props) {
     (acc, v) => acc + v,
     0,
   );
+  const traceUrl = langfuseTraceUrl(report.id);
 
   return (
     <>
@@ -47,14 +49,23 @@ export function ReportView({ report }: Props) {
           <span className="tabular">{total}</span>
         </StatusItem>
         <span className="ml-auto">
-          <a
-            href={`https://cloud.langfuse.com/trace?session_id=${encodeURIComponent(report.id)}`}
-            target="_blank"
-            rel="noreferrer noopener"
-            className="text-accent border-b border-dotted border-current"
-          >
-            ↗ langfuse trace
-          </a>
+          {traceUrl ? (
+            <a
+              href={traceUrl}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="text-accent border-b border-dotted border-current"
+            >
+              ↗ langfuse trace
+            </a>
+          ) : (
+            <span
+              className="text-fg-faint uppercase tracking-[0.08em] text-[10.5px]"
+              title="Set NEXT_PUBLIC_LANGFUSE_HOST in frontend/.env.local to enable"
+            >
+              langfuse — not configured
+            </span>
+          )}
         </span>
       </StatusBar>
 
@@ -131,14 +142,16 @@ export function ReportView({ report }: Props) {
           >
             Copy JSON
           </Button>
-          <Link
-            href={`https://cloud.langfuse.com/trace?session_id=${encodeURIComponent(report.id)}`}
-            target="_blank"
-            rel="noreferrer noopener"
-            className="border border-transparent px-[18px] py-[11px] text-[12px] uppercase tracking-[0.14em] font-medium text-fg-muted hover:text-fg hover:border-border"
-          >
-            ↗ Open in Langfuse
-          </Link>
+          {traceUrl && (
+            <Link
+              href={traceUrl as never}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="border border-transparent px-[18px] py-[11px] text-[12px] uppercase tracking-[0.14em] font-medium text-fg-muted hover:text-fg hover:border-border"
+            >
+              ↗ Open in Langfuse
+            </Link>
+          )}
         </div>
       </footer>
     </>

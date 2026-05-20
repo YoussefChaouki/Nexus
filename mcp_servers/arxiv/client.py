@@ -30,7 +30,7 @@ from tenacity import (
 
 logger = structlog.get_logger(__name__)
 
-ARXIV_API_URL: Final[str] = "http://export.arxiv.org/api/query"
+ARXIV_API_URL: Final[str] = "https://export.arxiv.org/api/query"
 ATOM_NS: Final[str] = "{http://www.w3.org/2005/Atom}"
 DEFAULT_RATE_LIMIT_PER_SECOND: Final[float] = 3.0
 DEFAULT_TIMEOUT_SECONDS: Final[float] = 30.0
@@ -72,7 +72,10 @@ class ArxivClient:
         rate_limit_per_second: float = DEFAULT_RATE_LIMIT_PER_SECOND,
         max_retries: int = DEFAULT_MAX_RETRIES,
     ) -> None:
-        self._client = client or httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS)
+        self._client = client or httpx.AsyncClient(
+            timeout=DEFAULT_TIMEOUT_SECONDS,
+            follow_redirects=True,
+        )
         self._owns_client = client is None
         self._limiter = _RateLimiter(1.0 / rate_limit_per_second)
         self._max_retries = max_retries

@@ -40,12 +40,18 @@ class NullCallbackHandler:
     have to branch on handler identity.
     """
 
+    # Flags read directly by LangChain's CallbackManager — must be plain
+    # attributes (not routed through __getattr__) so they evaluate to bools
+    # rather than triggering AttributeError. Mirrors BaseCallbackHandler.
     raise_error: bool = False
+    run_inline: bool = False
     ignore_llm: bool = False
+    ignore_retry: bool = False
     ignore_chain: bool = False
     ignore_agent: bool = False
     ignore_retriever: bool = False
     ignore_chat_model: bool = False
+    ignore_custom_event: bool = False
 
     def __getattr__(self, name: str) -> Any:  # noqa: ANN401
         """Return a no-op callable for any LangChain callback hook.

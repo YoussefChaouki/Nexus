@@ -3,9 +3,12 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/cn";
+import { NexusGlyph } from "./brand/glyph";
+import { Wordmark } from "./brand/wordmark";
 
 const TABS = [
-  { href: "/", label: "01 / Input" },
+  { href: "/", label: "← landing" },
+  { href: "/analyze", label: "01 / Input" },
   { href: "/history", label: "02 / History" },
 ] as const;
 
@@ -21,18 +24,23 @@ export function Nav() {
       )}
     >
       <div className="max-w-[1320px] mx-auto px-ds-6 py-ds-3 flex items-center gap-ds-5 flex-wrap">
-        <Link href="/" className="text-[12px] uppercase tracking-[0.1em] font-semibold">
-          <span className="text-accent">nexus</span>
-          <span className="text-fg-faint ml-ds-2 font-normal">
+        <Link href="/" className="flex items-center gap-ds-3 group">
+          <NexusGlyph variant="compact" size={26} />
+          <Wordmark size="md" blink />
+          <span className="hidden md:inline text-[10.5px] text-fg-faint uppercase tracking-[0.1em] font-normal ml-ds-1">
             {"// threat surface analyzer · v0.7.1"}
           </span>
         </Link>
         <div className="flex gap-ds-1 ml-auto flex-wrap">
           {TABS.map((tab) => {
             const isActive =
-              tab.href === "/"
-                ? pathname === "/" || pathname.startsWith("/runs") || pathname.startsWith("/reports")
-                : pathname.startsWith(tab.href);
+              tab.href === "/analyze"
+                ? pathname.startsWith("/analyze") ||
+                  pathname.startsWith("/runs") ||
+                  pathname.startsWith("/reports")
+                : tab.href === "/"
+                  ? false
+                  : pathname.startsWith(tab.href);
             return (
               <Link
                 key={tab.href}

@@ -14,6 +14,11 @@ services:
       retries: 5
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # Auto-apply pgvector extension + episodic/semantic schemas on first
+      # volume init. All migrations use CREATE … IF NOT EXISTS so they're
+      # safe to re-apply; existing volumes won't replay them — drop with
+      # `docker compose down -v` to force a clean re-init.
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
 
   redis:
     image: redis:7-alpine

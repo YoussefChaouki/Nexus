@@ -95,10 +95,31 @@ const config: Config = {
         blink: {
           "50%": { opacity: "0" },
         },
+        scanline: {
+          "0%": { top: "-2%", opacity: "0" },
+          "10%": { opacity: "1" },
+          "90%": { opacity: "1" },
+          "100%": { top: "102%", opacity: "0" },
+        },
+        pipeflow: {
+          "0%": { transform: "translate(-100%, -50%)", opacity: "0" },
+          "20%": { opacity: "0.6" },
+          "80%": { opacity: "0.6" },
+          "100%": { transform: "translate(100%, -50%)", opacity: "0" },
+        },
+        blip: {
+          "0%": { left: "-10px", opacity: "0" },
+          "10%": { opacity: "1" },
+          "90%": { opacity: "1" },
+          "100%": { left: "calc(100% + 10px)", opacity: "0" },
+        },
       },
       animation: {
         "pulse-soft": "pulse 1.6s ease-in-out infinite",
         blink: "blink 1.1s steps(2) infinite",
+        scanline: "scanline 9s linear infinite",
+        pipeflow: "pipeflow 4.5s linear infinite",
+        blip: "blip 4.5s linear infinite",
       },
     },
   },

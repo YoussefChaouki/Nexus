@@ -61,9 +61,6 @@ export function Launcher() {
         >
           ▶ Execute analysis
         </Button>
-        <Button variant="secondary" size="lg" disabled>
-          ⌘ Templates
-        </Button>
         {tooShort && value.length > 0 && (
           <span className="text-[10.5px] text-sev-high uppercase tracking-[0.1em]">
             {MIN_LEN - value.trim().length} more chars required
