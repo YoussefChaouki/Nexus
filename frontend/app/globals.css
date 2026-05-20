@@ -33,6 +33,19 @@
     padding: 0;
   }
 
+  html {
+    scroll-behavior: smooth;
+    /* Sticky nav (~48px) — keeps section headings clear of the bar
+       when in-page anchors scroll into view. */
+    scroll-padding-top: 64px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+  }
+
   body {
     background: var(--bg);
     color: var(--fg);
