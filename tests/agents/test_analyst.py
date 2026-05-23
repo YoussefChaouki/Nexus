@@ -31,17 +31,34 @@ from nexus.schemas.models import (
 
 
 class _FakeLLM:
-    """ChatOpenAI stand-in. Returns queued responses, one per ainvoke call."""
+    """ChatOpenAI stand-in.
 
-    def __init__(self, responses: list[str] | str) -> None:
+    Returns queued responses, one per ``ainvoke`` call. Recognises the
+    Analyst relevance-gate prompt (``"You gate the Analyst against
+    off-topic synthesis."``) and auto-answers ``yes`` without consuming
+    a queued response — keeps the synthesis-focused tests concise. Tests
+    that need to exercise the gate can pass ``relevance_responses=...``.
+    """
+
+    def __init__(
+        self,
+        responses: list[str] | str,
+        relevance_responses: list[str] | None = None,
+    ) -> None:
         if isinstance(responses, str):
             responses = [responses]
         self.responses = list(responses)
+        self.relevance_responses = list(relevance_responses) if relevance_responses else None
         self.calls: list[str] = []
 
     async def ainvoke(self, prompt: str, **_: Any) -> Any:
         self.calls.append(prompt)
-        if self.responses:
+        if "You gate the Analyst" in prompt:
+            if self.relevance_responses is not None and self.relevance_responses:
+                content = self.relevance_responses.pop(0)
+            else:
+                content = "yes - findings match the target architecture"
+        elif self.responses:
             content = self.responses.pop(0)
         else:
             content = "{}"
@@ -491,6 +508,84 @@ async def test_analyst_normalizes_uppercase_severity_from_llm() -> None:
     out = await AnalystAgent(llm=llm).run(_state(plan=plan, findings=findings))
 
     assert out["threat_surfaces"][0].severity.value == "high"
+
+
+async def test_analyst_skips_off_target_group() -> None:
+    """LLM gate answering 'no' must skip the surface, not synthesise it."""
+    plan = [_task(FocusArea.INJECTION, task_id="task-inj")]
+    findings = _strong_findings("task-inj")
+    # Synthesis response is queued but should NEVER be consumed because the
+    # gate says no.
+    llm = _FakeLLM(
+        [json.dumps(_surface_payload(name="Should-not-appear"))],
+        relevance_responses=["no - this finding is about M-Banking, target is a RAG pipeline"],
+    )
+
+    out = await AnalystAgent(llm=llm).run(_state(plan=plan, findings=findings))
+
+    assert out["threat_surfaces"] == []
+
+
+async def test_analyst_keeps_on_target_group_when_gate_says_yes() -> None:
+    plan = [_task(FocusArea.INJECTION, task_id="task-inj")]
+    findings = _strong_findings("task-inj")
+    llm = _FakeLLM(
+        [json.dumps(_surface_payload(name="Prompt Injection"))],
+        relevance_responses=["yes - prompt injection is a direct threat to the RAG endpoint"],
+    )
+
+    out = await AnalystAgent(llm=llm).run(_state(plan=plan, findings=findings))
+
+    assert len(out["threat_surfaces"]) == 1
+    assert out["threat_surfaces"][0].name == "Prompt Injection"
+
+
+async def test_analyst_gate_failure_falls_back_to_keeping_group() -> None:
+    """A gate LLM failure must NOT silently drop the surface."""
+    plan = [_task(FocusArea.INJECTION, task_id="task-inj")]
+    findings = _strong_findings("task-inj")
+
+    llm = _FakeLLM(
+        [json.dumps(_surface_payload(name="Prompt Injection"))],
+    )
+
+    original_ainvoke = llm.ainvoke
+    gate_calls = {"n": 0}
+
+    async def flaky_ainvoke(prompt: str, **kw: Any) -> Any:
+        if "You gate the Analyst" in prompt:
+            gate_calls["n"] += 1
+            raise RuntimeError("rate limited on gate")
+        return await original_ainvoke(prompt, **kw)
+
+    llm.ainvoke = flaky_ainvoke  # type: ignore[method-assign]
+    out = await AnalystAgent(llm=llm).run(_state(plan=plan, findings=findings))
+
+    assert gate_calls["n"] == 1
+    assert len(out["threat_surfaces"]) == 1
+
+
+async def test_analyst_gate_runs_once_per_focus_group() -> None:
+    """One gate call per focus_area, not one per finding."""
+    plan = [
+        _task(FocusArea.INJECTION, task_id="task-inj"),
+        _task(FocusArea.DATA_LEAKAGE, task_id="task-leak"),
+    ]
+    findings = [
+        *_strong_findings("task-inj"),
+        *_strong_findings("task-leak"),
+    ]
+    llm = _FakeLLM(
+        [
+            json.dumps(_surface_payload(name="Prompt Injection")),
+            json.dumps(_surface_payload(name="Data Leakage", severity="medium")),
+        ],
+    )
+
+    await AnalystAgent(llm=llm).run(_state(plan=plan, findings=findings))
+
+    gate_prompts = [p for p in llm.calls if "You gate the Analyst" in p]
+    assert len(gate_prompts) == 2
 
 
 def test_analyst_helpers_downgrade_severity() -> None:
