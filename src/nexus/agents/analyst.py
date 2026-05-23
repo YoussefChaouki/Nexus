@@ -98,6 +98,15 @@ class AnalystAgent(AgentBase):
         self.last_prompts = []
         surfaces: list[ThreatSurface] = []
         for focus_area, findings in groups.items():
+            if not await self._group_is_relevant(focus_area, findings, state):
+                self._logger.info(
+                    "analyst_skipped_off_target",
+                    session_id=state["session_id"],
+                    focus_area=focus_area.value,
+                    finding_count=len(findings),
+                    finding_ids=[f.id for f in findings],
+                )
+                continue
             patterns = await self._fetch_patterns(findings)
             surface = await self._synthesise(focus_area, findings, patterns, state)
             surfaces.append(surface)
@@ -130,6 +139,68 @@ class AnalystAgent(AgentBase):
         except Exception as exc:
             self._logger.warning("semantic_lookup_failed", error=str(exc))
             return []
+
+    # ----- relevance gate ---------------------------------------------------
+
+    async def _group_is_relevant(
+        self,
+        focus_area: FocusArea,
+        findings: list[FindingResult],
+        state: AgentState,
+    ) -> bool:
+        """Ask the LLM whether this finding group is on-topic for the target.
+
+        Returns ``True`` when the LLM answers ``yes`` (or when the call
+        fails) — we never let observability hiccups silently drop a
+        surface. A ``no`` answer is logged and the surface is skipped.
+        """
+        prompt = self._build_relevance_prompt(focus_area, findings, state["target_description"])
+        llm = self._llm or self._get_llm()
+        try:
+            response = await llm.ainvoke(
+                prompt,
+                config=self._invoke_config(
+                    state,
+                    step="relevance_gate",
+                    extra_metadata={
+                        "focus_area": focus_area.value,
+                        "finding_count": len(findings),
+                    },
+                ),
+            )
+        except Exception as exc:
+            self._logger.warning(
+                "analyst_relevance_gate_failed",
+                focus_area=focus_area.value,
+                error=str(exc),
+            )
+            return True
+
+        text = str(getattr(response, "content", response)).strip().lower()
+        first_token = text.split()[0] if text else ""
+        first_token = first_token.strip(".,:;\"'")
+        return not first_token.startswith("no")
+
+    def _build_relevance_prompt(
+        self,
+        focus_area: FocusArea,
+        findings: list[FindingResult],
+        target_description: str,
+    ) -> str:
+        bullets = "\n".join(
+            f"- [{f.source_type.value}] {f.title} :: {f.summary[:_FINDING_SUMMARY_CHARS]}"
+            for f in findings[:_TOP_FINDINGS_FOR_EMBED]
+        )
+        return (
+            "You gate the Analyst against off-topic synthesis.\n"
+            f"Target architecture: {target_description}\n"
+            f"Focus area: {focus_area.value}\n\n"
+            "Findings collected by the Researcher:\n"
+            f"{bullets}\n\n"
+            "Are these findings actually relevant to threat-modelling the "
+            "target above? Reply on a single line in the form "
+            "'yes - <one-sentence why>' or 'no - <one-sentence why>'."
+        )
 
     # ----- LLM synthesis ----------------------------------------------------
 

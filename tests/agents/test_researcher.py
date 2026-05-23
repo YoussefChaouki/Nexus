@@ -349,13 +349,13 @@ async def test_scoring_fn_is_applied_to_each_finding() -> None:
 
     async def custom_score(task: ResearchTask, finding: FindingResult) -> float:
         seen.append((task.id, finding.source_type.value))
-        return 0.42
+        return 0.72
 
     agent = ResearcherAgent(mcp_client=fake, scoring_fn=custom_score)
 
     out = await agent.run(_state(plan=plan))
 
-    assert all(f.relevance_score == 0.42 for f in out["findings"])
+    assert all(f.relevance_score == 0.72 for f in out["findings"])
     assert {entry[1] for entry in seen} == {"arxiv", "nvd", "atlas"}
 
 
@@ -425,6 +425,108 @@ async def test_default_score_returns_05_when_llm_fails(
     score = await agent._default_score(task, finding)
 
     assert score == 0.5
+
+
+async def test_findings_below_min_relevance_are_dropped() -> None:
+    """LLM-scored relevance below settings.researcher_min_relevance must be dropped."""
+    plan = [_make_task(FocusArea.INJECTION)]
+    fake = FakeMCPClient(responses=_all_three_responses())
+
+    async def low_score(_t: ResearchTask, _f: FindingResult) -> float:
+        return 0.1  # below default 0.5
+
+    agent = ResearcherAgent(mcp_client=fake, scoring_fn=low_score)
+    with pytest.raises(AgentError, match="zero findings"):
+        await agent.run(_state(plan=plan))
+
+
+async def test_settings_knob_changes_relevance_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lowering researcher_min_relevance keeps findings that would otherwise be dropped."""
+    from nexus.settings import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "researcher_min_relevance", 0.05)
+
+    plan = [_make_task(FocusArea.INJECTION)]
+    fake = FakeMCPClient(responses=_all_three_responses())
+
+    async def low_score(_t: ResearchTask, _f: FindingResult) -> float:
+        return 0.1
+
+    agent = ResearcherAgent(mcp_client=fake, scoring_fn=low_score)
+    out = await agent.run(_state(plan=plan))
+
+    assert len(out["findings"]) >= 1
+
+
+async def test_off_topic_findings_dropped_by_context_relevance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The M-Banking-on-RAG regression: cosine sim below threshold must be rejected."""
+    from nexus.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "researcher_min_context_relevance", 0.5)
+
+    plan = [_make_task(FocusArea.INJECTION)]
+    fake = FakeMCPClient(responses=_all_three_responses())
+
+    # Embed target as one vector and findings as an orthogonal vector → cosine=0.
+    async def orthogonal_embed(text: str) -> list[float]:
+        if "FastAPI" in text or "pgvector" in text or "RAG" in text:
+            return [1.0, 0.0, 0.0]
+        return [0.0, 1.0, 0.0]
+
+    agent = ResearcherAgent(
+        mcp_client=fake,
+        scoring_fn=_fixed_score,
+        embed_fn=orthogonal_embed,
+    )
+    with pytest.raises(AgentError, match="zero findings"):
+        await agent.run(_state(plan=plan))
+
+
+async def test_on_topic_findings_kept_by_context_relevance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cosine sim above threshold lets the finding through the context gate."""
+    from nexus.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "researcher_min_context_relevance", 0.5)
+
+    plan = [_make_task(FocusArea.INJECTION)]
+    fake = FakeMCPClient(responses=_all_three_responses())
+
+    async def aligned_embed(_text: str) -> list[float]:
+        return [1.0, 0.0, 0.0]  # always the same vector → cosine=1.0
+
+    agent = ResearcherAgent(
+        mcp_client=fake,
+        scoring_fn=_fixed_score,
+        embed_fn=aligned_embed,
+    )
+    out = await agent.run(_state(plan=plan))
+
+    assert len(out["findings"]) >= 1
+
+
+async def test_embed_failure_keeps_findings() -> None:
+    """A broken embed_fn must NOT drop findings — pipeline never aborts on observability."""
+    plan = [_make_task(FocusArea.INJECTION)]
+    fake = FakeMCPClient(responses=_all_three_responses())
+
+    async def broken_embed(_text: str) -> list[float]:
+        raise RuntimeError("openai is on fire")
+
+    agent = ResearcherAgent(
+        mcp_client=fake,
+        scoring_fn=_fixed_score,
+        embed_fn=broken_embed,
+    )
+    out = await agent.run(_state(plan=plan))
+
+    assert len(out["findings"]) >= 1
 
 
 async def test_short_summary_findings_are_filtered() -> None:

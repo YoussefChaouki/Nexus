@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-3-small"
     max_iterations: int = 3
 
+    # Researcher relevance filtering (S8.T2)
+    researcher_min_relevance: float = 0.5
+    researcher_min_context_relevance: float = 0.35
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
@@ -27,10 +28,13 @@ from nexus.schemas.models import (
     ResearchTask,
     SourceType,
 )
+from nexus.settings import get_settings
 
 ScoringFn = Callable[[ResearchTask, FindingResult], Awaitable[float]]
+EmbedFn = Callable[[str], Awaitable[list[float]]]
 
 _SUMMARY_MIN_LEN = 20
+_CONTEXT_EMBED_CHARS = 600
 
 # (server_name, tool_name) per source type. Kept in sync with mcp_servers/.
 _MCP_TOOLS: dict[SourceType, tuple[str, str]] = {
@@ -50,11 +54,13 @@ class ResearcherAgent(AgentBase):
         mcp_client: MCPClient | None = None,
         scoring_fn: ScoringFn | None = None,
         max_results_per_source: int = 10,
+        embed_fn: EmbedFn | None = None,
     ) -> None:
         super().__init__()
         self._mcp_client = mcp_client
         self._scoring_fn = scoring_fn or self._default_score
         self._max_results = max_results_per_source
+        self._embed_fn = embed_fn
 
     async def run(self, state: AgentState) -> AgentState:
         """Gather findings for the active task list and append them to state.
@@ -89,7 +95,15 @@ class ResearcherAgent(AgentBase):
                     await client.aclose()
 
             scored = await self._score_findings(tasks, raw_findings)
-            merged = _dedup(list(state["findings"]) + scored)
+            kept, dropped = await self._filter_findings(scored, state["target_description"])
+            if dropped:
+                self._logger.info(
+                    "researcher_findings_filtered",
+                    session_id=state["session_id"],
+                    dropped=len(dropped),
+                    kept=len(kept),
+                )
+            merged = _dedup(list(state["findings"]) + kept)
 
             if not merged:
                 raise AgentError(
@@ -225,6 +239,81 @@ class ResearcherAgent(AgentBase):
             scored.append(finding.model_copy(update={"relevance_score": score}))
         return scored
 
+    # ----- relevance filtering ---------------------------------------------
+
+    async def _filter_findings(
+        self,
+        findings: list[FindingResult],
+        target_description: str,
+    ) -> tuple[list[FindingResult], list[FindingResult]]:
+        """Drop findings whose LLM score or context-relevance is too low.
+
+        Returns ``(kept, dropped)``. Embedding failures are non-fatal: the
+        finding is kept (we never want network issues to silently empty
+        the research output).
+        """
+        settings = get_settings()
+        min_score = settings.researcher_min_relevance
+        min_context = settings.researcher_min_context_relevance
+
+        score_kept: list[FindingResult] = []
+        dropped: list[FindingResult] = []
+        for f in findings:
+            if f.relevance_score < min_score:
+                self._logger.info(
+                    "finding_dropped",
+                    reason="low_score",
+                    task_id=f.task_id,
+                    score=f.relevance_score,
+                    threshold=min_score,
+                    identifiers=list(f.identifiers),
+                )
+                dropped.append(f)
+                continue
+            score_kept.append(f)
+
+        if self._embed_fn is None or not score_kept:
+            return score_kept, dropped
+
+        try:
+            target_vec = await self._embed_fn(target_description)
+        except Exception as exc:
+            self._logger.warning(
+                "context_relevance_skipped",
+                reason="target_embed_failed",
+                error=str(exc),
+            )
+            return score_kept, dropped
+
+        final_kept: list[FindingResult] = []
+        for f in score_kept:
+            try:
+                finding_vec = await self._embed_fn(
+                    f"{f.title}\n{f.summary[:_CONTEXT_EMBED_CHARS]}",
+                )
+            except Exception as exc:
+                self._logger.warning(
+                    "context_relevance_finding_embed_failed",
+                    task_id=f.task_id,
+                    error=str(exc),
+                )
+                final_kept.append(f)
+                continue
+            context = _cosine(target_vec, finding_vec)
+            if context < min_context:
+                self._logger.info(
+                    "finding_dropped",
+                    reason="off_target",
+                    task_id=f.task_id,
+                    context_relevance=context,
+                    threshold=min_context,
+                    identifiers=list(f.identifiers),
+                )
+                dropped.append(f)
+                continue
+            final_kept.append(f)
+        return final_kept, dropped
+
     async def _default_score(
         self,
         task: ResearchTask,
@@ -274,6 +363,18 @@ class ResearcherAgent(AgentBase):
 
 
 # --- helpers ---------------------------------------------------------------
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    """Cosine similarity between two equal-length vectors. Returns 0.0 on degenerate input."""
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(y * y for y in b))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return dot / (norm_a * norm_b)
 
 
 def _dedup(findings: list[FindingResult]) -> list[FindingResult]:
