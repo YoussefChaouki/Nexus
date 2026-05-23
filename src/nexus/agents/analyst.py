@@ -50,6 +50,18 @@ _TOP_FINDINGS_FOR_EMBED = 5
 _FINDING_SUMMARY_CHARS = 300
 _PATTERN_TEXT_CHARS = 300
 
+# Severity ordering used by the evidence-quality downgrade.
+_SEVERITY_ORDER: list[Severity] = [
+    Severity.LOW,
+    Severity.MEDIUM,
+    Severity.HIGH,
+    Severity.CRITICAL,
+]
+
+# Triggers a one-band downgrade when evidence is thin / weak.
+_MIN_EVIDENCE_FOR_FULL_BAND = 2
+_MIN_TOP_RELEVANCE_FOR_FULL_BAND = 0.6
+
 
 class AnalystAgent(AgentBase):
     """Synthesises FindingResult groups into ThreatSurface entries."""
@@ -154,9 +166,28 @@ class AnalystAgent(AgentBase):
         except ValueError as exc:
             raise AgentError(f"Analyst could not parse LLM JSON: {exc}") from exc
 
+        # Severity rubric prompt uses uppercase bands for readability; LLMs
+        # mimic that casing and emit "HIGH" instead of the enum value "high".
+        if isinstance(payload.get("severity"), str):
+            payload["severity"] = payload["severity"].strip().lower()
+
         # The LLM never invents evidence — we attach the real FindingResult
         # objects so the schema's require_evidence validator always passes.
         payload["evidence"] = [f.model_dump() for f in findings]
+
+        downgraded = _maybe_downgrade(payload, findings)
+        if downgraded is not None:
+            self._logger.info(
+                "analyst_severity_downgraded",
+                session_id=state["session_id"],
+                focus_area=focus_area.value,
+                original=str(payload.get("severity")),
+                downgraded=downgraded.value,
+                evidence_count=len(findings),
+                top_relevance=max((f.relevance_score for f in findings), default=0.0),
+            )
+            payload["severity"] = downgraded.value
+
         try:
             return ThreatSurface.model_validate(payload)
         except Exception as exc:
@@ -190,21 +221,110 @@ class AnalystAgent(AgentBase):
             f"{findings_block}\n\n"
             "Related threat patterns (ATLAS / OWASP LLM Top 10):\n"
             f"{patterns_block}\n\n"
-            "Synthesise ONE ThreatSurface that summarises the threat for "
+            f"{_SEVERITY_RUBRIC}\n\n"
+            f"{_FEW_SHOT_EXAMPLES}\n\n"
+            "Now synthesise ONE ThreatSurface that summarises the threat for "
             "this focus area.\n"
-            f"Severity must be one of: {severities}.\n"
+            f"Severity must be one of: {severities}. Calibrate it against the "
+            "rubric above — do NOT default to HIGH. If the evidence does not "
+            "demonstrate impact at a band, pick the lower one.\n"
             "Pick owasp_category from the OWASP LLM Top 10 (e.g. LLM01, "
             "LLM02, LLM06, ...) when applicable; otherwise use null.\n"
             "Return ONLY a JSON object with keys: name, description, "
-            "severity, attack_vectors, mitigations, cvss_score (0-10 or "
-            "null), owasp_category. Do not include 'evidence' — the agent "
-            "attaches it.\n"
+            "severity, severity_reasoning, attack_vectors, mitigations, "
+            "cvss_score (0-10 or null), owasp_category. "
+            "severity_reasoning must be a one-sentence justification using "
+            "the rubric language (e.g. 'untrusted user upload reaches "
+            "embedding pipeline without sanitization → CRITICAL data exfil'). "
+            "Do not include 'evidence' — the agent attaches it.\n"
             "description must be at least 30 characters; mitigations must "
             "be a non-empty list of strings. Do not wrap in markdown."
         )
 
 
+# --- prompt blocks ---------------------------------------------------------
+
+
+_SEVERITY_RUBRIC = """\
+Severity rubric (CVSS bands + business-impact framing):
+- CRITICAL → Remote code execution, full data exfiltration, or authentication
+  bypass on the trust boundary. CVSS ≥ 9.0. Pick this when an untrusted input
+  reaches a privileged sink with no mitigation in the target description.
+- HIGH → Privilege escalation, partial data leak, or denial of service at
+  scale. CVSS 7.0–8.9. Pick this when impact is significant but bounded
+  (e.g. requires authenticated user, single-tenant blast radius).
+- MEDIUM → Degraded availability, non-secret information leak, or
+  misconfiguration that requires another flaw to be exploited. CVSS 4.0–6.9.
+- LOW → Reconnaissance, minor misconfig, defense-in-depth issue with no
+  direct exploit path. CVSS < 4.0.
+
+When in doubt, prefer the LOWER band. A flat HIGH distribution is a failure
+mode of this agent — the rubric exists to spread severity meaningfully."""
+
+
+_FEW_SHOT_EXAMPLES = """\
+Examples (these are templates, NOT outputs to copy verbatim):
+
+Example 1 — CRITICAL
+  Target: "Public RAG API, no authentication, user upload to embedding store"
+  Reasoning: untrusted user uploads reach the vector DB and downstream LLM
+  context with no auth gate → an attacker can poison embeddings AND exfil
+  other tenants' data through crafted prompts → CRITICAL data exfil + auth
+  bypass on the trust boundary.
+
+Example 2 — HIGH
+  Target: "Authenticated chatbot with tool calling, OpenAI moderation
+  enabled, no per-tool sandbox"
+  Reasoning: prompt injection can pivot through the tool layer to leak
+  per-user data, but the attacker needs a valid account first → bounded
+  blast radius, privilege escalation within tenant → HIGH.
+
+Example 3 — MEDIUM
+  Target: "Internal-only summarisation service behind SSO, logs scrubbed
+  before storage"
+  Reasoning: prompt-injection still possible but no untrusted upload path,
+  data exfil capped at one user's own prompts, no privileged tools wired →
+  MEDIUM degraded confidentiality at most."""
+
+
 # --- helpers ---------------------------------------------------------------
+
+
+def _maybe_downgrade(
+    payload: dict[str, Any],
+    findings: list[FindingResult],
+) -> Severity | None:
+    """Return a downgraded :class:`Severity` when evidence quality is thin.
+
+    Triggers when fewer than :data:`_MIN_EVIDENCE_FOR_FULL_BAND` findings
+    back the surface, or the highest relevance score sits below
+    :data:`_MIN_TOP_RELEVANCE_FOR_FULL_BAND`. Returns ``None`` when no
+    downgrade applies or the LLM emitted an unparseable severity.
+    """
+    raw = payload.get("severity")
+    if not isinstance(raw, str):
+        return None
+    try:
+        current = Severity(raw.lower())
+    except ValueError:
+        return None
+
+    top_relevance = max((f.relevance_score for f in findings), default=0.0)
+    thin_evidence = len(findings) < _MIN_EVIDENCE_FOR_FULL_BAND
+    weak_relevance = top_relevance < _MIN_TOP_RELEVANCE_FOR_FULL_BAND
+    if not (thin_evidence or weak_relevance):
+        return None
+
+    return _downgrade_severity(current)
+
+
+def _downgrade_severity(severity: Severity) -> Severity:
+    """Drop ``severity`` by one band. LOW is a fixed point."""
+    try:
+        idx = _SEVERITY_ORDER.index(severity)
+    except ValueError:
+        return severity
+    return _SEVERITY_ORDER[max(0, idx - 1)]
 
 
 def _group_by_focus_area(

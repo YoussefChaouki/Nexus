@@ -102,6 +102,7 @@ class ThreatSurface(BaseModel):
     mitigations: list[str] = Field(min_length=1)
     cvss_score: float | None = Field(default=None, ge=0.0, le=10.0)
     owasp_category: str | None = None
+    severity_reasoning: str | None = None
 
     @field_validator("attack_vectors", "mitigations", mode="before")
     @classmethod
