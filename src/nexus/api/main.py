@@ -35,7 +35,14 @@ from nexus.graph.streaming import stream_pipeline_events
 from nexus.memory.episodic import EpisodicMemory
 from nexus.memory.report_cache import get_report_cache
 from nexus.memory.working import check_redis_health
-from nexus.schemas.models import AgentEvent, AnalyzeRequest, ThreatReport, ThreatReportSummary
+from nexus.schemas.models import (
+    AgentEvent,
+    AnalyzeRequest,
+    FocusArea,
+    Severity,
+    ThreatReport,
+    ThreatReportSummary,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -224,6 +231,35 @@ def create_app() -> FastAPI:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="report not found",
+        )
+
+    # ----- GET /reports ---------------------------------------------------
+
+    @app.get("/reports", response_model=list[ThreatReportSummary])
+    async def list_reports(
+        limit: int = Query(default=50, ge=1, le=100),
+        offset: int = Query(default=0, ge=0),
+        severity: Severity | None = Query(default=None),
+        focus_area: FocusArea | None = Query(default=None),
+        pool: Any = Depends(get_pg_pool),
+    ) -> list[ThreatReportSummary]:
+        """Return persisted ThreatReportSummary entries ordered by recency.
+
+        Empty list when memory is configured but holds no rows; ``503``
+        when the pgvector pool is unavailable so the frontend can tell
+        "no runs yet" apart from "backend missing".
+        """
+        if pool is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="episodic memory pool unavailable",
+            )
+        memory = EpisodicMemory(pool=pool)
+        return await memory.list_recent(
+            limit=limit,
+            offset=offset,
+            severity=severity,
+            focus_area=focus_area,
         )
 
     # ----- GET /health ----------------------------------------------------

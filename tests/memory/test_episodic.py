@@ -114,6 +114,92 @@ async def test_get_by_id_returns_none_when_not_found(
     assert result is None
 
 
+async def test_list_recent_returns_rows_in_order(
+    mock_pool: tuple[MagicMock, AsyncMock],
+    sample_summary: ThreatReportSummary,
+) -> None:
+    pool, conn = mock_pool
+    row = {
+        "id": sample_summary.id,
+        "session_id": sample_summary.session_id,
+        "target_description": sample_summary.target_description,
+        "created_at": sample_summary.created_at,
+        "surface_count": sample_summary.surface_count,
+        "severity_breakdown": json.dumps(sample_summary.severity_breakdown),
+        "focus_areas_covered": json.dumps([f.value for f in sample_summary.focus_areas_covered]),
+        "top_attack_vectors": json.dumps(sample_summary.top_attack_vectors),
+        "overall_critic_score": sample_summary.overall_critic_score,
+        "iteration_count": sample_summary.iteration_count,
+    }
+    conn.fetch.return_value = [row, row]
+    mem = EpisodicMemory(pool)
+
+    out = await mem.list_recent(limit=5, offset=0)
+
+    assert len(out) == 2
+    call = conn.fetch.await_args
+    sql = call.args[0]
+    assert "ORDER BY created_at DESC" in sql
+    assert call.args[1:] == (5, 0)  # limit, offset
+
+
+async def test_list_recent_applies_severity_filter(
+    mock_pool: tuple[MagicMock, AsyncMock],
+) -> None:
+    from nexus.schemas.models import Severity
+
+    pool, conn = mock_pool
+    conn.fetch.return_value = []
+    mem = EpisodicMemory(pool)
+
+    await mem.list_recent(severity=Severity.CRITICAL, limit=10)
+
+    sql = conn.fetch.await_args.args[0]
+    assert "severity_breakdown" in sql
+    # Severity value is the first positional param, then limit & offset.
+    assert conn.fetch.await_args.args[1:] == ("critical", 10, 0)
+
+
+async def test_list_recent_applies_focus_area_filter(
+    mock_pool: tuple[MagicMock, AsyncMock],
+) -> None:
+    from nexus.schemas.models import FocusArea
+
+    pool, conn = mock_pool
+    conn.fetch.return_value = []
+    mem = EpisodicMemory(pool)
+
+    await mem.list_recent(focus_area=FocusArea.INJECTION)
+
+    sql = conn.fetch.await_args.args[0]
+    assert "focus_areas_covered" in sql and "@>" in sql
+    assert conn.fetch.await_args.args[1] == json.dumps(["injection"])
+
+
+async def test_list_recent_clamps_limit_and_offset(
+    mock_pool: tuple[MagicMock, AsyncMock],
+) -> None:
+    pool, conn = mock_pool
+    conn.fetch.return_value = []
+    mem = EpisodicMemory(pool)
+
+    await mem.list_recent(limit=9999, offset=-3)
+
+    args = conn.fetch.await_args.args
+    assert args[-2] == 100  # clamped to _MAX_LIST_LIMIT
+    assert args[-1] == 0  # negative offset → 0
+
+
+async def test_list_recent_returns_empty_on_db_error(
+    mock_pool: tuple[MagicMock, AsyncMock],
+) -> None:
+    pool, conn = mock_pool
+    conn.fetch.side_effect = RuntimeError("connection lost")
+    mem = EpisodicMemory(pool)
+    out = await mem.list_recent()
+    assert out == []
+
+
 async def test_get_by_id_returns_summary(
     mock_pool: tuple[MagicMock, AsyncMock],
     sample_summary: ThreatReportSummary,

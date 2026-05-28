@@ -68,14 +68,20 @@ export type ThreatReport = z.infer<typeof ThreatReport>;
 
 export const ThreatReportSummary = z.object({
   id: z.string(),
+  session_id: z.string().optional(),
   target_description: z.string(),
   created_at: z.string(),
   surface_count: z.number(),
   severity_breakdown: z.record(z.number()).default({}),
   focus_areas_covered: z.array(FocusAreaEnum).default([]),
   top_attack_vectors: z.array(z.string()).default([]),
+  overall_critic_score: z.number().optional(),
+  iteration_count: z.number().optional(),
 });
 export type ThreatReportSummary = z.infer<typeof ThreatReportSummary>;
+
+export const ThreatReportSummaryList = z.array(ThreatReportSummary);
+export type ThreatReportSummaryList = z.infer<typeof ThreatReportSummaryList>;
 
 // SSE event from GET /analyze/stream.
 // agent ∈ {pipeline, planner, researcher, analyst, critic, writer}

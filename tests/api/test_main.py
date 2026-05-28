@@ -209,6 +209,18 @@ def _pool_with_row(row: dict[str, Any] | None) -> Any:
     return pool
 
 
+def _pool_with_rows(rows: list[dict[str, Any]]) -> Any:
+    """Pool that returns ``rows`` from ``conn.fetch`` (used by list_recent)."""
+    conn = MagicMock()
+    conn.fetch = AsyncMock(return_value=rows)
+    pool = MagicMock()
+    acquire_cm = MagicMock()
+    acquire_cm.__aenter__ = AsyncMock(return_value=conn)
+    acquire_cm.__aexit__ = AsyncMock(return_value=None)
+    pool.acquire = MagicMock(return_value=acquire_cm)
+    return pool
+
+
 def test_get_report_returns_summary_when_present() -> None:
     pool = _pool_with_row(_summary_row())
     client = _build_client(pg_pool=pool)
@@ -269,6 +281,74 @@ def test_get_report_prefers_cache_over_pool(
 
     assert response.status_code == 200
     assert response.json()["id"] == summary.id
+
+
+# ---------------------------------------------------------------------------
+# GET /reports
+# ---------------------------------------------------------------------------
+
+
+def test_list_reports_returns_rows() -> None:
+    pool = _pool_with_rows([_summary_row(), _summary_row()])
+    client = _build_client(pg_pool=pool)
+
+    response = client.get("/reports?limit=10&offset=0")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body, list)
+    assert len(body) == 2
+    assert body[0]["id"] == "report-fixture-0001"
+
+
+def test_list_reports_returns_empty_when_no_rows() -> None:
+    pool = _pool_with_rows([])
+    client = _build_client(pg_pool=pool)
+
+    response = client.get("/reports")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_list_reports_returns_503_when_pool_unavailable() -> None:
+    client = _build_client(pg_pool=None)
+    response = client.get("/reports")
+    assert response.status_code == 503
+
+
+def test_list_reports_rejects_out_of_range_limit() -> None:
+    pool = _pool_with_rows([])
+    client = _build_client(pg_pool=pool)
+
+    too_big = client.get("/reports?limit=500")
+    too_small = client.get("/reports?limit=0")
+
+    assert too_big.status_code == 422
+    assert too_small.status_code == 422
+
+
+def test_list_reports_passes_filters_to_memory() -> None:
+    pool = _pool_with_rows([])
+    client = _build_client(pg_pool=pool)
+
+    response = client.get("/reports?severity=critical&focus_area=injection")
+
+    assert response.status_code == 200
+    # severity comes as one positional param, focus_area as JSON containment,
+    # then limit & offset. We just sanity-check fetch was called with extra args.
+    conn = pool.acquire.return_value.__aenter__.return_value
+    assert conn.fetch.await_count == 1
+    sql = conn.fetch.await_args.args[0]
+    assert "severity_breakdown" in sql
+    assert "focus_areas_covered" in sql
+
+
+def test_list_reports_rejects_invalid_severity() -> None:
+    pool = _pool_with_rows([])
+    client = _build_client(pg_pool=pool)
+    response = client.get("/reports?severity=mega")
+    assert response.status_code == 422
 
 
 # ---------------------------------------------------------------------------

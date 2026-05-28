@@ -1,4 +1,17 @@
-import { ThreatReport, ThreatReportSummary } from "./schemas";
+import {
+  FocusArea,
+  Severity,
+  ThreatReport,
+  ThreatReportSummary,
+  ThreatReportSummaryList,
+} from "./schemas";
+
+export interface ListReportsParams {
+  limit?: number;
+  offset?: number;
+  severity?: Severity;
+  focus_area?: FocusArea;
+}
 
 export const API_BASE =
   process.env.NEXT_PUBLIC_NEXUS_API_URL ?? "http://localhost:8000";
@@ -49,6 +62,17 @@ export async function postAnalyze(targetDescription: string, sessionId?: string)
 
 export async function getReportSummary(reportId: string) {
   return jsonFetch(`/report/${encodeURIComponent(reportId)}`, undefined, ThreatReportSummary);
+}
+
+export async function listReports(params: ListReportsParams = {}) {
+  const qs = new URLSearchParams();
+  if (params.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params.offset !== undefined) qs.set("offset", String(params.offset));
+  if (params.severity) qs.set("severity", params.severity);
+  if (params.focus_area) qs.set("focus_area", params.focus_area);
+  const suffix = qs.toString();
+  const path = suffix ? `/reports?${suffix}` : "/reports";
+  return jsonFetch(path, undefined, ThreatReportSummaryList);
 }
 
 export function buildStreamUrl(targetDescription: string, sessionId: string): string {
