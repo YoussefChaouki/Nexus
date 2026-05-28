@@ -6,11 +6,12 @@ from typing import Any
 import structlog
 
 from nexus.exceptions import MemoryLayerError
-from nexus.schemas.models import FocusArea, ThreatReportSummary
+from nexus.schemas.models import FocusArea, Severity, ThreatReportSummary
 
 logger = structlog.get_logger(__name__)
 
 _EMBEDDING_DIM = 1536
+_MAX_LIST_LIMIT = 100
 
 
 class EpisodicMemory:
@@ -105,6 +106,60 @@ class EpisodicMemory:
             logger.warning("episodic_search_failed", error=str(exc))
             return []
 
+        return [_row_to_summary(row) for row in rows]
+
+    async def list_recent(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        severity: Severity | None = None,
+        focus_area: FocusArea | None = None,
+    ) -> list[ThreatReportSummary]:
+        """Return recent summaries ordered by ``created_at DESC``.
+
+        Args:
+            limit: Max rows (clamped to ``_MAX_LIST_LIMIT``).
+            offset: Pagination offset, ≥ 0.
+            severity: When provided, keep summaries whose
+                ``severity_breakdown[severity] > 0`` (JSONB query).
+            focus_area: When provided, keep summaries whose
+                ``focus_areas_covered`` JSON array contains the area.
+
+        Returns:
+            Empty list on DB error or when the table is empty.
+        """
+        safe_limit = max(1, min(limit, _MAX_LIST_LIMIT))
+        safe_offset = max(0, offset)
+
+        clauses: list[str] = []
+        params: list[Any] = []
+
+        if severity is not None:
+            params.append(severity.value)
+            clauses.append(f"COALESCE((severity_breakdown::jsonb ->> ${len(params)})::int, 0) > 0")
+        if focus_area is not None:
+            params.append(json.dumps([focus_area.value]))
+            clauses.append(f"focus_areas_covered::jsonb @> ${len(params)}::jsonb")
+
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.extend([safe_limit, safe_offset])
+        sql = f"""
+            SELECT id, session_id, target_description, created_at,
+                   surface_count, severity_breakdown, focus_areas_covered,
+                   top_attack_vectors, overall_critic_score, iteration_count
+            FROM threat_report_summaries
+            {where}
+            ORDER BY created_at DESC
+            LIMIT ${len(params) - 1} OFFSET ${len(params)}
+        """  # noqa: S608 — placeholders are numeric, not user input
+
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(sql, *params)
+        except Exception as exc:  # asyncpg.PostgresError — untyped package
+            logger.warning("episodic_list_failed", error=str(exc))
+            return []
         return [_row_to_summary(row) for row in rows]
 
     async def get_by_id(self, summary_id: str) -> ThreatReportSummary | None:
