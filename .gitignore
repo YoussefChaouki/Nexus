@@ -42,3 +42,6 @@ out/
 
 # Private planning docs
 docs/SPRINTS.md
+
+# eval harness runtime artifacts
+tests/eval/results.json
