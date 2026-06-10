@@ -2,7 +2,7 @@
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from redis.asyncio import Redis
@@ -74,7 +74,10 @@ async def check_redis_health(client: Redis) -> bool:
         True if Redis responds to PING, False on any error.
     """
     try:
-        return bool(await client.ping())  # type: ignore[misc]
+        # client.ping() is typed as Awaitable[bool] | bool by newer redis
+        # stubs and plain Awaitable[bool] by older ones; cast to Any so the
+        # await is valid (and the cast never redundant) across both.
+        return bool(await cast("Any", client.ping()))
     except (RedisError, OSError) as exc:
         logger.warning("redis_health_failed", error=str(exc))
         return False
