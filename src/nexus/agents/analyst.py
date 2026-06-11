@@ -98,10 +98,25 @@ class AnalystAgent(AgentBase):
             raise AgentError("AnalystAgent requires a non-empty plan in state")
 
         groups = _group_by_focus_area(state["findings"], state["plan"])
+        # Focus areas the Critic explicitly demanded via re_research_tasks
+        # bypass the relevance gate: skipping a category the Critic just
+        # asked to cover guarantees a wasted iteration (observed in prod —
+        # data_leakage gated out three passes in a row).
+        critic = state["critic_report"]
+        demanded: set[FocusArea] = (
+            {t.focus_area for t in critic.re_research_tasks} if critic is not None else set()
+        )
         self.last_prompts = []
         surfaces: list[ThreatSurface] = []
         for focus_area, findings in groups.items():
-            if not await self._group_is_relevant(focus_area, findings, state):
+            if focus_area in demanded:
+                self._logger.info(
+                    "analyst_gate_bypassed",
+                    session_id=state["session_id"],
+                    focus_area=focus_area.value,
+                    reason="critic_demanded_re_research",
+                )
+            elif not await self._group_is_relevant(focus_area, findings, state):
                 self._logger.info(
                     "analyst_skipped_off_target",
                     session_id=state["session_id"],
@@ -200,9 +215,15 @@ class AnalystAgent(AgentBase):
             f"Focus area: {focus_area.value}\n\n"
             "Findings collected by the Researcher:\n"
             f"{bullets}\n\n"
-            "Are these findings actually relevant to threat-modelling the "
-            "target above? Reply on a single line in the form "
-            "'yes - <one-sentence why>' or 'no - <one-sentence why>'."
+            "Could a meaningful threat surface for this focus area on this "
+            "target be built from these findings?\n"
+            "Answer 'no' ONLY when the findings clearly belong to an "
+            "unrelated domain (e.g. mobile-banking malware for a RAG "
+            "pipeline). Thin, weak, or generic evidence is NOT a reason to "
+            "answer no — severity calibration downgrades weak evidence "
+            "downstream. When in doubt, answer yes.\n"
+            "Reply on a single line in the form 'yes - <one-sentence why>' "
+            "or 'no - <one-sentence why>'."
         )
 
     # ----- LLM synthesis ----------------------------------------------------
