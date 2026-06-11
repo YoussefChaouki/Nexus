@@ -275,8 +275,12 @@ async def test_re_research_uses_critic_tasks_not_original_plan() -> None:
     assert iter1_ids == plan_ids
     assert iter2_ids.isdisjoint(plan_ids)
     assert iter1_ids != iter2_ids
-    assert len(iter2_tasks) == 1
-    assert iter2_tasks[0].focus_area == FocusArea.MODEL_EXTRACTION
+    # Iteration 2 runs the critic's re_research_tasks: the LLM's
+    # model_extraction task plus the S10 deterministic supplements that
+    # target the remaining uncovered OWASP categories — never plan tasks.
+    assert FocusArea.MODEL_EXTRACTION in {t.focus_area for t in iter2_tasks}
+    plan_descriptions = {t.description for t in final["plan"]}
+    assert all(t.description not in plan_descriptions for t in iter2_tasks)
 
 
 async def test_findings_are_cumulative_across_iterations() -> None:

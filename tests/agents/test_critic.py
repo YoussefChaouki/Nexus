@@ -145,7 +145,7 @@ def _re_research_task(focus_area: FocusArea) -> dict[str, Any]:
 async def test_approve_when_score_above_threshold() -> None:
     llm = _FakeLLM(
         [
-            json.dumps(["LLM01", "LLM06"]),  # filter
+            json.dumps(["LLM01"]),  # filter — fully covered by the default surface
             _critic_payload(score=0.75, recommendation=Recommendation.APPROVE),
         ],
     )
@@ -153,7 +153,9 @@ async def test_approve_when_score_above_threshold() -> None:
 
     report = out["critic_report"]
     assert report is not None
-    assert report.overall_score == 0.75
+    # Score is deterministic coverage (LLM01 covered / LLM01 applicable),
+    # not the LLM's self-reported 0.75.
+    assert report.overall_score == 1.0
     assert report.recommendation == Recommendation.APPROVE
     assert report.re_research_tasks == []
     # Filter + main eval = exactly two LLM calls.
@@ -177,8 +179,10 @@ async def test_re_research_when_score_below_threshold() -> None:
     report = out["critic_report"]
     assert report is not None
     assert report.recommendation == Recommendation.RE_RESEARCH
-    assert len(report.re_research_tasks) == 1
-    assert report.re_research_tasks[0].focus_area == FocusArea.MODEL_EXTRACTION
+    # The LLM task covers LLM10 (model_extraction); the deterministic
+    # supplement adds one for the unaddressed LLM06 gap (data_leakage).
+    focus_areas = {t.focus_area for t in report.re_research_tasks}
+    assert focus_areas == {FocusArea.MODEL_EXTRACTION, FocusArea.DATA_LEAKAGE}
 
 
 async def test_force_approve_at_max_iterations() -> None:
@@ -200,7 +204,8 @@ async def test_force_approve_at_max_iterations() -> None:
     assert report is not None
     assert report.recommendation == Recommendation.APPROVE
     assert report.re_research_tasks == []
-    assert report.overall_score == 0.40  # score preserved for transparency
+    # Deterministic coverage: LLM01 covered of [LLM01, LLM10] applicable.
+    assert report.overall_score == 0.5
 
 
 async def test_force_approve_when_llm_returns_inconsistent_high_score() -> None:
@@ -247,6 +252,85 @@ async def test_re_research_tasks_target_uncovered_categories() -> None:
     assert report is not None
     focus_areas = {t.focus_area for t in report.re_research_tasks}
     assert focus_areas == {FocusArea.DATA_LEAKAGE, FocusArea.MODEL_EXTRACTION}
+
+
+async def test_overall_score_ignores_llm_arithmetic() -> None:
+    """S10: the score driving the loop is computed coverage, not LLM maths."""
+    surfaces = [_surface(owasp="LLM01: Prompt Injection")]  # prose-wrapped code
+    llm = _FakeLLM(
+        [
+            json.dumps(["LLM01", "LLM04", "LLM06", "LLM10"]),  # 4 applicable
+            _critic_payload(score=0.95, recommendation=Recommendation.APPROVE),
+        ],
+    )
+    out = await CriticAgent(llm=llm).run(_state(surfaces=surfaces))
+
+    report = out["critic_report"]
+    assert report is not None
+    assert report.overall_score == 0.25  # 1 covered / 4 applicable
+
+
+async def test_gaps_supplemented_with_uncovered_categories() -> None:
+    """Uncovered applicable categories always show up in gaps."""
+    llm = _FakeLLM(
+        [
+            json.dumps(["LLM01", "LLM06"]),
+            _critic_payload(score=0.9, recommendation=Recommendation.APPROVE, gaps=[]),
+        ],
+    )
+    out = await CriticAgent(llm=llm).run(_state())  # default surface covers LLM01
+
+    report = out["critic_report"]
+    assert report is not None
+    assert any("LLM06" in gap for gap in report.gaps)
+    assert not any("LLM01" in gap for gap in report.gaps)
+
+
+async def test_gaps_not_duplicated_when_llm_already_reported_them() -> None:
+    llm = _FakeLLM(
+        [
+            json.dumps(["LLM01", "LLM06"]),
+            _critic_payload(
+                score=0.5,
+                recommendation=Recommendation.APPROVE,
+                gaps=["LLM06 sensitive data exposure not assessed"],
+            ),
+        ],
+    )
+    out = await CriticAgent(llm=llm).run(_state())
+
+    report = out["critic_report"]
+    assert report is not None
+    assert sum("LLM06" in gap for gap in report.gaps) == 1
+
+
+async def test_re_research_tasks_synthesized_for_unaddressed_gaps() -> None:
+    """Every uncovered category maps to a re-research task on RE_RESEARCH."""
+    llm = _FakeLLM(
+        [
+            json.dumps(["LLM01", "LLM04", "LLM06", "LLM10"]),
+            _critic_payload(
+                score=0.25,
+                recommendation=Recommendation.RE_RESEARCH,
+                gaps=["coverage thin"],
+                re_research_tasks=[_re_research_task(FocusArea.MODEL_EXTRACTION)],
+            ),
+        ],
+    )
+    out = await CriticAgent(llm=llm).run(_state())  # covers LLM01 only
+
+    report = out["critic_report"]
+    assert report is not None
+    focus_areas = {t.focus_area for t in report.re_research_tasks}
+    # LLM10 addressed by the LLM's task; LLM04 → dos and LLM06 →
+    # data_leakage synthesized deterministically.
+    assert focus_areas == {
+        FocusArea.MODEL_EXTRACTION,
+        FocusArea.DENIAL_OF_SERVICE,
+        FocusArea.DATA_LEAKAGE,
+    }
+    for task in report.re_research_tasks:
+        assert task.search_queries, "synthesized tasks must carry search queries"
 
 
 async def test_langfuse_handler_called_with_session_id() -> None:

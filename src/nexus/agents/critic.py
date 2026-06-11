@@ -11,7 +11,12 @@ Pipeline:
        :class:`CriticReport`.
     3. Parse the response, retry once on validation error, and validate
        the result against the :class:`CriticReport` schema.
-    4. Apply guardrails: force ``APPROVE`` when the score crosses 0.6
+    4. Recompute ``overall_score`` deterministically as the coverage
+       ratio (covered applicable categories / applicable categories) —
+       the LLM's arithmetic is advisory only. Uncovered categories are
+       appended to ``gaps`` and, on RE_RESEARCH, each gets a targeted
+       re-research task.
+    5. Apply guardrails: force ``APPROVE`` when the score crosses 0.6
        *or* the loop has reached ``max_iterations`` — this mirrors the
        behaviour the :class:`ControllableCriticStub` exhibited during
        S5.T1 routing validation.
@@ -24,6 +29,7 @@ hierarchy.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, cast
 
 from nexus.agents.base import AgentBase
@@ -33,7 +39,9 @@ from nexus.schemas.models import (
     AgentState,
     CriticReport,
     FocusArea,
+    Priority,
     Recommendation,
+    ResearchTask,
     ThreatSurface,
 )
 from nexus.settings import get_settings
@@ -71,6 +79,10 @@ _OWASP_TO_FOCUS: dict[str, FocusArea] = {
 }
 
 _APPROVE_THRESHOLD = 0.6
+# Deterministic-vs-LLM score divergence beyond which we log a warning.
+_SCORE_DIVERGENCE_WARN = 0.05
+
+_OWASP_CODE_RE = re.compile(r"LLM\s*0*(\d{1,2})", re.IGNORECASE)
 
 
 class CriticAgent(AgentBase):
@@ -104,6 +116,11 @@ class CriticAgent(AgentBase):
             state=state,
             applicable=applicable,
             callbacks=callbacks,
+        )
+        report = self._apply_deterministic_coverage(
+            report,
+            surfaces=state["threat_surfaces"],
+            applicable=applicable,
         )
         report = self._apply_guardrails(report, state)
         return cast(AgentState, {**state, "critic_report": report})
@@ -226,6 +243,59 @@ class CriticAgent(AgentBase):
             raise AgentError(f"Critic evaluation LLM call failed: {exc}") from exc
         return str(getattr(response, "content", response)).strip()
 
+    # ----- deterministic coverage --------------------------------------------
+
+    def _apply_deterministic_coverage(
+        self,
+        report: CriticReport,
+        *,
+        surfaces: list[ThreatSurface],
+        applicable: list[str],
+    ) -> CriticReport:
+        """Replace the LLM-computed score with a coverage ratio computed in code.
+
+        The eval prompt defines ``overall_score`` as
+        ``covered_categories / applicable``, but an LLM is an unreliable
+        calculator and this score drives the re-research loop. Coverage is
+        therefore recomputed from the surfaces' ``owasp_category`` fields:
+
+        * ``overall_score`` ← ``len(covered & applicable) / len(applicable)``;
+        * every uncovered applicable category not already mentioned in
+          ``gaps`` is appended for transparency;
+        * when the LLM recommended RE_RESEARCH, a synthesized task is added
+          for each uncovered category whose mapped focus_area no existing
+          task addresses, so the next iteration targets every gap.
+
+        The LLM keeps qualitative ownership of ``recommendation`` and
+        ``bias_warnings``; only the quantitative parts are made deterministic.
+        """
+        if not applicable:
+            return report
+        covered = _covered_categories(surfaces) & set(applicable)
+        coverage = round(len(covered) / len(applicable), 4)
+        if abs(report.overall_score - coverage) > _SCORE_DIVERGENCE_WARN:
+            self._logger.warning(
+                "critic_score_overridden",
+                llm_score=report.overall_score,
+                computed_coverage=coverage,
+                covered=sorted(covered),
+                applicable=applicable,
+            )
+
+        uncovered = [c for c in applicable if c not in covered]
+        gaps = list(report.gaps)
+        for category in uncovered:
+            if not any(category in gap for gap in gaps):
+                gaps.append(f"{category} ({OWASP_LLM_TOP10[category]}) not covered")
+
+        update: dict[str, Any] = {"overall_score": coverage, "gaps": gaps}
+        if report.recommendation == Recommendation.RE_RESEARCH:
+            update["re_research_tasks"] = _supplement_tasks(
+                list(report.re_research_tasks),
+                uncovered,
+            )
+        return report.model_copy(update=update)
+
     # ----- guardrails -------------------------------------------------------
 
     def _apply_guardrails(self, report: CriticReport, state: AgentState) -> CriticReport:
@@ -247,6 +317,57 @@ class CriticAgent(AgentBase):
                 },
             )
         return report
+
+
+# ---------------------------------------------------------------------------
+# Deterministic coverage helpers
+# ---------------------------------------------------------------------------
+
+
+def _covered_categories(surfaces: list[ThreatSurface]) -> set[str]:
+    """Canonical OWASP codes referenced by the surfaces' ``owasp_category``.
+
+    Tolerates the formats real LLMs emit: ``"LLM01"``, ``"LLM01: Prompt
+    Injection"``, ``"llm 1"``. Out-of-range numbers are ignored.
+    """
+    out: set[str] = set()
+    for surface in surfaces:
+        if not surface.owasp_category:
+            continue
+        for match in _OWASP_CODE_RE.finditer(surface.owasp_category):
+            n = int(match.group(1))
+            if 1 <= n <= 10:
+                out.add(f"LLM{n:02d}")
+    return out
+
+
+def _supplement_tasks(
+    tasks: list[ResearchTask],
+    uncovered: list[str],
+) -> list[ResearchTask]:
+    """Ensure every uncovered category has a re-research task targeting it.
+
+    A category counts as addressed when an existing task already carries
+    its mapped focus_area (coarse but cheap — several categories share a
+    focus_area, and one targeted task per area is what the Researcher can
+    actually dispatch).
+    """
+    addressed = {t.focus_area for t in tasks}
+    for category in uncovered:
+        focus = _OWASP_TO_FOCUS.get(category, FocusArea.OTHER)
+        if focus in addressed:
+            continue
+        addressed.add(focus)
+        title = OWASP_LLM_TOP10[category].split("—")[0].strip()
+        tasks.append(
+            ResearchTask(
+                description=(f"Cover OWASP {category} ({title}) for the target architecture."),
+                focus_area=focus,
+                priority=Priority.HIGH,
+                search_queries=[title.lower()],
+            ),
+        )
+    return tasks
 
 
 # ---------------------------------------------------------------------------
