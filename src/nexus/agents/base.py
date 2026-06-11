@@ -34,6 +34,7 @@ class AgentBase(ABC):
         return ChatOpenAI(
             model=settings.llm_model,
             temperature=settings.llm_temperature,
+            max_retries=settings.llm_max_retries,
             openai_api_key=settings.openai_api_key.get_secret_value(),
         )
 

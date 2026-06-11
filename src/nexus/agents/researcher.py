@@ -39,8 +39,6 @@ _CONTEXT_EMBED_CHARS = 600
 # Schema allows 1-3 search_queries per task; cap defensively so a rogue
 # plan can't multiply MCP fan-out unboundedly.
 _MAX_QUERIES_PER_TASK = 3
-# Bounded concurrency for per-finding LLM scoring and embedding calls.
-_PER_FINDING_CONCURRENCY = 8
 
 _FLOAT_RE = re.compile(r"\d*\.?\d+")
 
@@ -235,7 +233,7 @@ class ResearcherAgent(AgentBase):
         finding — which dominated pipeline latency on large fan-outs.
         """
         task_by_id = {t.id: t for t in tasks}
-        semaphore = asyncio.Semaphore(_PER_FINDING_CONCURRENCY)
+        semaphore = asyncio.Semaphore(get_settings().llm_concurrency)
 
         async def _score_one(finding: FindingResult) -> FindingResult:
             task = task_by_id.get(finding.task_id)
@@ -302,7 +300,7 @@ class ResearcherAgent(AgentBase):
             )
             return score_kept, dropped
 
-        semaphore = asyncio.Semaphore(_PER_FINDING_CONCURRENCY)
+        semaphore = asyncio.Semaphore(get_settings().llm_concurrency)
         embed_fn = self._embed_fn
 
         async def _embed_one(f: FindingResult) -> list[float] | None:

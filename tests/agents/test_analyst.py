@@ -631,6 +631,31 @@ async def test_analyst_other_focus_area_keeps_null_owasp() -> None:
     assert out["threat_surfaces"][0].owasp_category is None
 
 
+async def test_analyst_other_group_prompt_lists_candidate_categories() -> None:
+    """OTHER has no canonical default — the prompt must offer LLM02/07/08/09."""
+    plan = [_task(FocusArea.OTHER, task_id="task-other")]
+    findings = _strong_findings("task-other")
+    llm = _FakeLLM(json.dumps(_surface_payload(name="Excessive Agency", owasp="LLM08")))
+
+    agent = AnalystAgent(llm=llm)
+    await agent.run(_state(plan=plan, findings=findings))
+
+    prompt = agent.last_prompts[0]
+    for cat in ("LLM02", "LLM07", "LLM08", "LLM09"):
+        assert cat in prompt
+
+
+async def test_analyst_non_other_group_prompt_has_no_other_hint() -> None:
+    plan = [_task(FocusArea.INJECTION, task_id="task-inj")]
+    findings = _strong_findings("task-inj")
+    llm = _FakeLLM(json.dumps(_surface_payload()))
+
+    agent = AnalystAgent(llm=llm)
+    await agent.run(_state(plan=plan, findings=findings))
+
+    assert "excessive agency" not in agent.last_prompts[0]
+
+
 async def test_analyst_gate_bypassed_for_critic_demanded_focus_area() -> None:
     """A focus area the Critic re-researched must never be gate-skipped.
 

@@ -377,8 +377,9 @@ class AnalystAgent(AgentBase):
             "exfiltration through the LLM context is LLM06. Default mapping "
             "by focus area when nothing more specific applies: "
             "injection→LLM01, data_leakage→LLM06, dos→LLM04, "
-            "supply_chain→LLM05, model_extraction→LLM10. Use null only when "
-            "no LLM-specific category fits at all.\n"
+            "supply_chain→LLM05, model_extraction→LLM10. "
+            f"{_other_owasp_hint(focus_area)}"
+            "Use null only when no LLM-specific category fits at all.\n"
             "Return ONLY a JSON object with keys: name, description, "
             "severity, severity_reasoning, attack_vectors, mitigations, "
             "cvss_score (0-10 or null), owasp_category. "
@@ -437,6 +438,23 @@ Example 3 — MEDIUM
 
 
 # --- helpers ---------------------------------------------------------------
+
+
+def _other_owasp_hint(focus_area: FocusArea) -> str:
+    """Category guidance for the OTHER group, which has no canonical default.
+
+    LLM02/07/08/09 all map to FocusArea.OTHER — without an explicit label
+    from the LLM these surfaces stay null and the Critic's coverage score
+    can never credit them, freezing the feedback loop below threshold.
+    """
+    if focus_area is not FocusArea.OTHER:
+        return ""
+    return (
+        "For this 'other' focus area, choose the BEST-FITTING of: LLM02 "
+        "(insecure output handling), LLM07 (insecure plugin design), LLM08 "
+        "(excessive agency — autonomous tools, no human approval), LLM09 "
+        "(overreliance). "
+    )
 
 
 def _maybe_downgrade(

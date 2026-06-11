@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     # Agents emit structured JSON parsed by Pydantic — deterministic
     # decoding cuts validation retries; raise only for exploratory use.
     llm_temperature: float = 0.0
+    # OpenAI SDK retries (exponential backoff, honours Retry-After) — a
+    # transient 429 must never kill a multi-minute pipeline run.
+    llm_max_retries: int = 5
+    # Concurrent per-finding LLM/embedding calls. Keep modest: orgs on
+    # low TPM tiers (30k tokens/min) hit 429 storms with aggressive bursts.
+    llm_concurrency: int = 4
     embedding_model: str = "text-embedding-3-small"
     max_iterations: int = 3
 
