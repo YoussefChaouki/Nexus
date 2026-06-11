@@ -35,6 +35,8 @@ export function Launcher() {
       <PromptTextarea
         value={value}
         onChange={setValue}
+        onSubmit={execute}
+        maxLength={MAX_LEN}
         footRight={
           <span className="inline-flex items-center gap-ds-4">
             {AGENT_NAMES.map((a) => (
@@ -59,7 +61,7 @@ export function Launcher() {
           onClick={execute}
           className="flex-1 min-w-[200px] justify-center"
         >
-          ▶ Execute analysis
+          {pending ? "▶ Launching…" : "▶ Execute analysis"}
         </Button>
         {tooShort && value.length > 0 && (
           <span className="text-[10.5px] text-sev-high uppercase tracking-[0.1em]">
