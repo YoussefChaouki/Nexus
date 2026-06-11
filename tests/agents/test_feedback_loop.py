@@ -162,15 +162,22 @@ async def test_two_iterations_then_approve() -> None:
     assert critic.calls == 2
     assert report.critic_report.recommendation == Recommendation.APPROVE
 
-    # Findings cumulative: iter-1 task_ids come from state['plan'],
-    # iter-2 task_ids come from the re_research_tasks (NOT in the plan).
-    plan_ids = {t.id for t in final["plan"]}
+    # Findings cumulative: iter-1 task_ids come from the original plan,
+    # iter-2 task_ids from the re_research_tasks. The spy captured both
+    # task lists — final["plan"] can't tell them apart any more because
+    # the Researcher merges executed re-research tasks into the plan.
+    original_plan_ids = {t.id for t in researcher.task_lists_seen[0]}
+    re_research_ids = {t.id for t in researcher.task_lists_seen[1]}
     findings = final["findings"]
-    iter1_finding_ids = {f.id for f in findings if f.task_id in plan_ids}
-    iter2_finding_ids = {f.id for f in findings if f.task_id not in plan_ids}
+    iter1_finding_ids = {f.id for f in findings if f.task_id in original_plan_ids}
+    iter2_finding_ids = {f.id for f in findings if f.task_id in re_research_ids}
     assert iter1_finding_ids, "expected findings tied to the original plan"
     assert iter2_finding_ids, "expected findings tied to re_research tasks"
     assert len(findings) > researcher.findings_before_iteration[1]
+
+    # The merge itself: the final plan covers BOTH task lists, so the
+    # Analyst can credit re-research findings to their focus areas.
+    assert {t.id for t in final["plan"]} == original_plan_ids | re_research_ids
 
     # Surfaces produced in iteration 2 collectively reference findings from
     # both iterations (analyst sees the cumulative findings list).
@@ -208,18 +215,17 @@ async def test_re_research_uses_critic_tasks_not_original_plan() -> None:
     assert len(researcher.task_lists_seen) == 2, "researcher must run exactly twice"
     iter1_tasks, iter2_tasks = researcher.task_lists_seen
 
-    plan_ids = {t.id for t in final["plan"]}
     iter1_ids = {t.id for t in iter1_tasks}
     iter2_ids = {t.id for t in iter2_tasks}
 
-    # Iteration 1 used the original plan verbatim.
-    assert iter1_ids == plan_ids
-    # Iteration 2 used the Critic's re_research_tasks — disjoint from the plan.
-    assert iter2_ids.isdisjoint(plan_ids)
-    assert iter1_ids != iter2_ids
+    # Iteration 2 used the Critic's re_research_tasks — disjoint from the
+    # original plan (captured by the spy at iteration 1).
+    assert iter2_ids.isdisjoint(iter1_ids)
     # And the stub's re_research_task targets MODEL_EXTRACTION as documented.
     assert len(iter2_tasks) == 1
     assert iter2_tasks[0].focus_area == FocusArea.MODEL_EXTRACTION
+    # After the run, the plan contains both lists (re-research merge).
+    assert {t.id for t in final["plan"]} == iter1_ids | iter2_ids
 
 
 async def test_findings_are_cumulative_across_iterations() -> None:

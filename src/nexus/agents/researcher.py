@@ -140,6 +140,7 @@ class ResearcherAgent(AgentBase):
             {
                 **state,
                 "findings": merged,
+                "plan": _merge_into_plan(list(state["plan"]), tasks),
                 "iteration_count": state["iteration_count"] + 1,
             },
         )
@@ -392,6 +393,25 @@ class ResearcherAgent(AgentBase):
 
 
 # --- helpers ---------------------------------------------------------------
+
+
+def _merge_into_plan(
+    plan: list[ResearchTask],
+    executed: list[ResearchTask],
+) -> list[ResearchTask]:
+    """Append executed tasks the plan doesn't know yet (re-research tasks).
+
+    Downstream consumers resolve findings through a ``task_id → plan``
+    lookup: the Analyst to group findings by focus_area, the Writer to
+    derive ``focus_areas_covered``. Critic-issued re_research_tasks never
+    entered the plan, so every re-research finding fell back to
+    FocusArea.OTHER — the Analyst could not credit it to the OWASP
+    category the Critic asked for, and coverage could not improve across
+    iterations. First-run tasks are already in the plan and are skipped.
+    """
+    known = {t.id for t in plan}
+    plan.extend(t for t in executed if t.id not in known)
+    return plan
 
 
 def _queries_for(task: ResearchTask) -> list[str]:
