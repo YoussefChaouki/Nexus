@@ -495,6 +495,55 @@ async def test_analyst_distribution_not_flat_on_s7_failure_case() -> None:
     assert len(bands) >= 2, f"severity distribution must not be flat: got {bands}"
 
 
+async def test_analyst_prompt_includes_target_description() -> None:
+    """S10: severity calibration needs the target's trust boundaries in-context."""
+    plan = [_task(FocusArea.INJECTION, task_id="task-inj")]
+    findings = _strong_findings("task-inj")
+    llm = _FakeLLM(json.dumps(_surface_payload()))
+
+    agent = AnalystAgent(llm=llm)
+    state = _state(plan=plan, findings=findings)
+    state["target_description"] = "Streamlit RAG on ECS, no auth, user uploads"
+    await agent.run(state)
+
+    prompt = agent.last_prompts[0]
+    assert "Streamlit RAG on ECS, no auth, user uploads" in prompt
+    assert "Target architecture under analysis" in prompt
+
+
+async def test_analyst_prompt_caps_findings_and_ranks_by_relevance() -> None:
+    """Only the strongest findings enter the prompt; weak tail is excluded."""
+    plan = [_task(FocusArea.INJECTION, task_id="task-inj")]
+    findings = [
+        _finding("task-inj", ident=f"arxiv:{i}", title=f"Paper {i}", score=i / 100)
+        for i in range(1, 21)  # scores 0.01 .. 0.20
+    ]
+    llm = _FakeLLM(json.dumps(_surface_payload()))
+
+    agent = AnalystAgent(llm=llm)
+    await agent.run(_state(plan=plan, findings=findings))
+
+    prompt = agent.last_prompts[0]
+    # Top-12 by relevance are Papers 9..20; the weakest 8 must be absent.
+    assert "Paper 20" in prompt and "Paper 9" in prompt
+    assert "Paper 8 " not in prompt and "Paper 1 " not in prompt
+
+
+async def test_analyst_evidence_sorted_by_relevance_desc() -> None:
+    plan = [_task(FocusArea.INJECTION, task_id="task-inj")]
+    findings = [
+        _finding("task-inj", ident="arxiv:lo", title="weak", score=0.55),
+        _finding("task-inj", ident="arxiv:hi", title="strong", score=0.95),
+        _finding("task-inj", ident="arxiv:mid", title="middle", score=0.7),
+    ]
+    llm = _FakeLLM(json.dumps(_surface_payload()))
+
+    out = await AnalystAgent(llm=llm).run(_state(plan=plan, findings=findings))
+
+    scores = [e.relevance_score for e in out["threat_surfaces"][0].evidence]
+    assert scores == sorted(scores, reverse=True)
+
+
 async def test_analyst_normalizes_uppercase_severity_from_llm() -> None:
     """Real LLMs mimic the prompt's uppercase rubric (e.g. emit 'HIGH').
 

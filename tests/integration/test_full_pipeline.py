@@ -171,6 +171,9 @@ async def test_full_pipeline_two_iterations() -> None:
     assert llm.critic_filter_calls == 2
     assert llm.critic_eval_calls == 2
 
+    # Every synthesis call was preceded by an S8.T2 relevance-gate call.
+    assert llm.analyst_gate_calls == llm.analyst_calls
+
     # Planner once, then two cycles of researcher_scoring → analyst → critic.
     transitions = _unique_transitions(llm.agent_calls)
     assert transitions == [

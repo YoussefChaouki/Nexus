@@ -26,6 +26,9 @@ class Settings(BaseSettings):
 
     # Model configuration
     llm_model: str = "gpt-4o"
+    # Agents emit structured JSON parsed by Pydantic — deterministic
+    # decoding cuts validation retries; raise only for exploratory use.
+    llm_temperature: float = 0.0
     embedding_model: str = "text-embedding-3-small"
     max_iterations: int = 3
 
