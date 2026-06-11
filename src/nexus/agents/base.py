@@ -33,6 +33,7 @@ class AgentBase(ABC):
         settings = get_settings()
         return ChatOpenAI(
             model=settings.llm_model,
+            temperature=settings.llm_temperature,
             openai_api_key=settings.openai_api_key.get_secret_value(),
         )
 

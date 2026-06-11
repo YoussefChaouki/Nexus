@@ -5,11 +5,9 @@ from typing import Literal
 import structlog
 
 from nexus.schemas.models import AgentState, Recommendation
+from nexus.settings import get_settings
 
 logger = structlog.get_logger(__name__)
-
-# Mirrors Settings.max_iterations and ThreatReport.iteration_count Field(le=3).
-_MAX_ITERATIONS = 3
 
 
 def route_after_critic(state: AgentState) -> Literal["researcher", "writer"]:
@@ -27,7 +25,7 @@ def route_after_critic(state: AgentState) -> Literal["researcher", "writer"]:
     if (
         critic_report is not None
         and critic_report.recommendation == Recommendation.RE_RESEARCH
-        and iteration_count < _MAX_ITERATIONS
+        and iteration_count < get_settings().max_iterations
     ):
         logger.info("routing", decision="re_research", iteration=iteration_count)
         return "researcher"

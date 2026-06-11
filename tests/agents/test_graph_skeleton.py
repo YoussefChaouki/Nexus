@@ -4,7 +4,7 @@ from typing import cast
 
 import pytest
 
-from nexus.graph.edges import _MAX_ITERATIONS, route_after_critic
+from nexus.graph.edges import route_after_critic
 from nexus.graph.graph import build_graph
 from nexus.graph.state import AgentState
 from nexus.schemas.models import (
@@ -14,6 +14,9 @@ from nexus.schemas.models import (
     Recommendation,
     ResearchTask,
 )
+from nexus.settings import get_settings
+
+_MAX_ITERATIONS = get_settings().max_iterations
 
 
 @pytest.fixture()
@@ -94,6 +97,20 @@ def test_route_re_research_below_max(
         {**base_state, "critic_report": re_research_report, "iteration_count": _MAX_ITERATIONS - 1},
     )
     assert route_after_critic(state) == "researcher"
+
+
+def test_route_respects_settings_max_iterations(
+    base_state: AgentState,
+    re_research_report: CriticReport,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Routing must read Settings, not a hardcoded constant."""
+    monkeypatch.setattr(get_settings(), "max_iterations", 2)
+    state = cast(
+        AgentState,
+        {**base_state, "critic_report": re_research_report, "iteration_count": 2},
+    )
+    assert route_after_critic(state) == "writer"
 
 
 def test_build_graph_returns_compiled_graph() -> None:
