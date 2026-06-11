@@ -9,9 +9,9 @@ Pipeline:
           :class:`SemanticMemory` for related :class:`ThreatPattern`
           entries (top 5). The lookup is silently skipped when the
           memory layer or embed function is missing.
-       b. Build a structured prompt (focus area + findings + patterns)
-          and ask the LLM for a single :class:`ThreatSurface` JSON
-          object.
+       b. Build a structured prompt (target architecture + focus area +
+          top findings + patterns) and ask the LLM for a single
+          :class:`ThreatSurface` JSON object.
        c. Force the real FindingResult objects as ``evidence`` so the
           schema's ``require_evidence`` validator always passes, and
           run :meth:`ThreatSurface.model_validate`.
@@ -49,6 +49,9 @@ _PATTERN_LIMIT = 5
 _TOP_FINDINGS_FOR_EMBED = 5
 _FINDING_SUMMARY_CHARS = 300
 _PATTERN_TEXT_CHARS = 300
+# Caps the findings block in the synthesis prompt — beyond this the extra
+# low-relevance items dilute the context without adding signal.
+_MAX_FINDINGS_IN_PROMPT = 12
 
 # Severity ordering used by the evidence-quality downgrade.
 _SEVERITY_ORDER: list[Severity] = [
@@ -211,7 +214,12 @@ class AnalystAgent(AgentBase):
         patterns: list[ThreatPattern],
         state: AgentState,
     ) -> ThreatSurface:
-        prompt = self._build_prompt(focus_area, findings, patterns)
+        prompt = self._build_prompt(
+            focus_area,
+            findings,
+            patterns,
+            state["target_description"],
+        )
         self.last_prompts.append(prompt)
 
         llm = self._llm or self._get_llm()
@@ -243,8 +251,11 @@ class AnalystAgent(AgentBase):
             payload["severity"] = payload["severity"].strip().lower()
 
         # The LLM never invents evidence — we attach the real FindingResult
-        # objects so the schema's require_evidence validator always passes.
-        payload["evidence"] = [f.model_dump() for f in findings]
+        # objects (strongest first) so the schema's require_evidence
+        # validator always passes and report readers see the best citations
+        # at the top.
+        ranked = sorted(findings, key=lambda f: f.relevance_score, reverse=True)
+        payload["evidence"] = [f.model_dump() for f in ranked]
 
         downgraded = _maybe_downgrade(payload, findings)
         if downgraded is not None:
@@ -269,11 +280,17 @@ class AnalystAgent(AgentBase):
         focus_area: FocusArea,
         findings: list[FindingResult],
         patterns: list[ThreatPattern],
+        target_description: str,
     ) -> str:
         severities = ", ".join(s.value for s in Severity)
+        # Strongest evidence first; cap so weak tail findings don't dilute
+        # the synthesis context.
+        top_findings = sorted(findings, key=lambda f: f.relevance_score, reverse=True)[
+            :_MAX_FINDINGS_IN_PROMPT
+        ]
         findings_block = "\n".join(
             f"- [{f.source_type.value}] {f.title} :: {f.summary[:_FINDING_SUMMARY_CHARS]}"
-            for f in findings
+            for f in top_findings
         )
         if patterns:
             patterns_block = "\n".join(
@@ -287,18 +304,23 @@ class AnalystAgent(AgentBase):
         return (
             "You are the Analyst agent for an AI security threat-modelling "
             "pipeline.\n"
+            f"Target architecture under analysis:\n{target_description}\n\n"
             f"Focus area: {focus_area.value}\n\n"
-            "Findings collected by the Researcher:\n"
+            "Findings collected by the Researcher (strongest first):\n"
             f"{findings_block}\n\n"
             "Related threat patterns (ATLAS / OWASP LLM Top 10):\n"
             f"{patterns_block}\n\n"
             f"{_SEVERITY_RUBRIC}\n\n"
             f"{_FEW_SHOT_EXAMPLES}\n\n"
             "Now synthesise ONE ThreatSurface that summarises the threat for "
-            "this focus area.\n"
+            "this focus area AGAINST THE TARGET ARCHITECTURE ABOVE.\n"
+            "Ground the description, attack_vectors and mitigations in the "
+            "target's actual components and trust boundaries (auth model, "
+            "ingestion paths, exposed services) — not in generic advice.\n"
             f"Severity must be one of: {severities}. Calibrate it against the "
-            "rubric above — do NOT default to HIGH. If the evidence does not "
-            "demonstrate impact at a band, pick the lower one.\n"
+            "rubric above using the target's trust boundaries — do NOT "
+            "default to HIGH. If the evidence does not demonstrate impact at "
+            "a band for THIS target, pick the lower one.\n"
             "Pick owasp_category from the OWASP LLM Top 10 (e.g. LLM01, "
             "LLM02, LLM06, ...) when applicable; otherwise use null.\n"
             "Return ONLY a JSON object with keys: name, description, "
