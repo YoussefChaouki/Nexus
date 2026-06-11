@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import re
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
@@ -35,6 +36,13 @@ EmbedFn = Callable[[str], Awaitable[list[float]]]
 
 _SUMMARY_MIN_LEN = 20
 _CONTEXT_EMBED_CHARS = 600
+# Schema allows 1-3 search_queries per task; cap defensively so a rogue
+# plan can't multiply MCP fan-out unboundedly.
+_MAX_QUERIES_PER_TASK = 3
+# Bounded concurrency for per-finding LLM scoring and embedding calls.
+_PER_FINDING_CONCURRENCY = 8
+
+_FLOAT_RE = re.compile(r"\d*\.?\d+")
 
 # (server_name, tool_name) per source type. Kept in sync with mcp_servers/.
 _MCP_TOOLS: dict[SourceType, tuple[str, str]] = {
@@ -155,9 +163,10 @@ class ResearcherAgent(AgentBase):
         client: MCPClient,
     ) -> list[FindingResult]:
         coros = [
-            self._call_one(client, task, source_type)
+            self._call_one(client, task, source_type, query)
             for task in tasks
             for source_type in _MCP_TOOLS
+            for query in _queries_for(task)
         ]
         batches = await asyncio.gather(*coros)
         return [finding for batch in batches for finding in batch]
@@ -167,9 +176,9 @@ class ResearcherAgent(AgentBase):
         client: MCPClient,
         task: ResearchTask,
         source_type: SourceType,
+        query: str,
     ) -> list[FindingResult]:
         server, tool = _MCP_TOOLS[source_type]
-        query = task.search_queries[0] if task.search_queries else task.description
         kwargs: dict[str, Any] = {"max_results": self._max_results}
         if source_type == SourceType.NVD:
             kwargs["keyword"] = query
@@ -219,25 +228,32 @@ class ResearcherAgent(AgentBase):
         tasks: list[ResearchTask],
         findings: list[FindingResult],
     ) -> list[FindingResult]:
+        """Score every finding concurrently (bounded by a semaphore).
+
+        Scoring was previously sequential — one awaited LLM call per
+        finding — which dominated pipeline latency on large fan-outs.
+        """
         task_by_id = {t.id: t for t in tasks}
-        scored: list[FindingResult] = []
-        for finding in findings:
+        semaphore = asyncio.Semaphore(_PER_FINDING_CONCURRENCY)
+
+        async def _score_one(finding: FindingResult) -> FindingResult:
             task = task_by_id.get(finding.task_id)
             if task is None:
-                scored.append(finding)
-                continue
-            try:
-                score = await self._scoring_fn(task, finding)
-            except Exception as exc:
-                self._logger.warning(
-                    "scoring_failed",
-                    task_id=finding.task_id,
-                    error=str(exc),
-                )
-                score = 0.5
+                return finding
+            async with semaphore:
+                try:
+                    score = await self._scoring_fn(task, finding)
+                except Exception as exc:
+                    self._logger.warning(
+                        "scoring_failed",
+                        task_id=finding.task_id,
+                        error=str(exc),
+                    )
+                    score = 0.5
             score = max(0.0, min(1.0, float(score)))
-            scored.append(finding.model_copy(update={"relevance_score": score}))
-        return scored
+            return finding.model_copy(update={"relevance_score": score})
+
+        return list(await asyncio.gather(*(_score_one(f) for f in findings)))
 
     # ----- relevance filtering ---------------------------------------------
 
@@ -285,18 +301,26 @@ class ResearcherAgent(AgentBase):
             )
             return score_kept, dropped
 
+        semaphore = asyncio.Semaphore(_PER_FINDING_CONCURRENCY)
+        embed_fn = self._embed_fn
+
+        async def _embed_one(f: FindingResult) -> list[float] | None:
+            async with semaphore:
+                try:
+                    return await embed_fn(f"{f.title}\n{f.summary[:_CONTEXT_EMBED_CHARS]}")
+                except Exception as exc:
+                    self._logger.warning(
+                        "context_relevance_finding_embed_failed",
+                        task_id=f.task_id,
+                        error=str(exc),
+                    )
+                    return None
+
+        vectors = await asyncio.gather(*(_embed_one(f) for f in score_kept))
+
         final_kept: list[FindingResult] = []
-        for f in score_kept:
-            try:
-                finding_vec = await self._embed_fn(
-                    f"{f.title}\n{f.summary[:_CONTEXT_EMBED_CHARS]}",
-                )
-            except Exception as exc:
-                self._logger.warning(
-                    "context_relevance_finding_embed_failed",
-                    task_id=f.task_id,
-                    error=str(exc),
-                )
+        for f, finding_vec in zip(score_kept, vectors, strict=True):
+            if finding_vec is None:
                 final_kept.append(f)
                 continue
             context = _cosine(target_vec, finding_vec)
@@ -337,8 +361,13 @@ class ResearcherAgent(AgentBase):
         except Exception:
             return 0.5
         text = str(getattr(response, "content", response)).strip()
+        # Tolerate prose around the number ("Score: 0.85", "0.85."), which
+        # a bare float() rejects — silently degrading every score to 0.5.
+        match = _FLOAT_RE.search(text)
+        if match is None:
+            return 0.5
         try:
-            return float(text)
+            return float(match.group())
         except ValueError:
             return 0.5
 
@@ -365,6 +394,19 @@ class ResearcherAgent(AgentBase):
 # --- helpers ---------------------------------------------------------------
 
 
+def _queries_for(task: ResearchTask) -> list[str]:
+    """Every search query the Planner attached to ``task`` (capped).
+
+    The plan schema allows 1-3 queries per task; previously only the
+    first was ever issued, silently discarding the rest of the planned
+    coverage. Falls back to the task description when no queries exist.
+    """
+    queries = [q for q in task.search_queries if q.strip()]
+    if not queries:
+        return [task.description]
+    return queries[:_MAX_QUERIES_PER_TASK]
+
+
 def _cosine(a: list[float], b: list[float]) -> float:
     """Cosine similarity between two equal-length vectors. Returns 0.0 on degenerate input."""
     if not a or not b or len(a) != len(b):
@@ -378,10 +420,16 @@ def _cosine(a: list[float], b: list[float]) -> float:
 
 
 def _dedup(findings: list[FindingResult]) -> list[FindingResult]:
-    """Drop later findings that share at least one identifier with an earlier one."""
+    """Drop duplicate findings, keeping the highest-relevance copy.
+
+    Findings are visited strongest-first (stable on ties), so when two
+    findings share an identifier the better-scored one survives instead
+    of whichever happened to arrive first.
+    """
+    ranked = sorted(findings, key=lambda f: f.relevance_score, reverse=True)
     seen: set[str] = set()
     out: list[FindingResult] = []
-    for f in findings:
+    for f in ranked:
         keys = list(f.identifiers) or [f"_uuid:{f.id}"]
         if any(k in seen for k in keys):
             continue

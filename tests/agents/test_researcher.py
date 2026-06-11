@@ -529,6 +529,80 @@ async def test_embed_failure_keeps_findings() -> None:
     assert len(out["findings"]) >= 1
 
 
+async def test_all_search_queries_are_fanned_out() -> None:
+    """S10: every planned search query is issued, not just the first."""
+    task = ResearchTask(
+        description="Investigate prompt injection in depth.",
+        focus_area=FocusArea.INJECTION,
+        priority=Priority.HIGH,
+        search_queries=["prompt injection RAG", "indirect injection", "jailbreak retrieval"],
+    )
+    fake = FakeMCPClient(responses=_all_three_responses())
+    agent = ResearcherAgent(mcp_client=fake, scoring_fn=_fixed_score)
+
+    await agent.run(_state(plan=[task]))
+
+    # 1 task × 3 MCP servers × 3 queries = 9 calls.
+    assert len(fake.calls) == 9
+    issued = {str(kw.get("query") or kw.get("keyword")) for _, _, kw in fake.calls}
+    assert issued == {"prompt injection RAG", "indirect injection", "jailbreak retrieval"}
+
+
+async def test_default_score_parses_prose_wrapped_float(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """'Score: 0.85' style replies must parse instead of degrading to 0.5."""
+    from nexus.agents import researcher as researcher_module
+
+    class _ProseLLM:
+        async def ainvoke(self, _prompt: str, **_: Any) -> Any:
+            return type("FakeResp", (), {"content": "Score: 0.85."})()
+
+    monkeypatch.setattr(
+        researcher_module.AgentBase,
+        "_get_llm",
+        lambda self: _ProseLLM(),
+    )
+
+    agent = ResearcherAgent(mcp_client=FakeMCPClient())
+    task = _make_task(FocusArea.INJECTION)
+    finding = FindingResult(
+        task_id=task.id,
+        source_type=SourceType.ARXIV,
+        title="x",
+        summary="A summary that is long enough to satisfy the validator.",
+        relevance_score=0.0,
+        identifiers=["arxiv:1"],
+    )
+
+    assert await agent._default_score(task, finding) == 0.85
+
+
+async def test_dedup_keeps_highest_relevance_duplicate() -> None:
+    """When two tasks surface the same identifier, the better-scored copy wins."""
+    task_a = _make_task(FocusArea.INJECTION, "injection")
+    task_b = _make_task(FocusArea.OTHER, "other")
+    fake = FakeMCPClient(
+        responses={
+            ("arxiv", "search_papers"): json.dumps(_arxiv_papers("2401.77777")),
+            ("nvd", "search_cves"): "[]",
+            ("atlas", "search_techniques"): "[]",
+        },
+    )
+
+    async def per_task_score(task: ResearchTask, _f: FindingResult) -> float:
+        return 0.9 if task.id == task_b.id else 0.6
+
+    agent = ResearcherAgent(mcp_client=fake, scoring_fn=per_task_score)
+
+    out = await agent.run(_state(plan=[task_a, task_b]))
+
+    arxiv = [f for f in out["findings"] if f.source_type == SourceType.ARXIV]
+    assert len(arxiv) == 1
+    assert arxiv[0].relevance_score == 0.9
+    assert arxiv[0].task_id == task_b.id
+
+
 async def test_short_summary_findings_are_filtered() -> None:
     """Items whose summary is shorter than 20 chars must not become FindingResults."""
     plan = [_make_task(FocusArea.INJECTION)]
