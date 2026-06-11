@@ -1,9 +1,9 @@
 import {
-  FocusArea,
-  Severity,
   ThreatReport,
   ThreatReportSummary,
   ThreatReportSummaryList,
+  type FocusArea,
+  type Severity,
 } from "./schemas";
 
 export interface ListReportsParams {

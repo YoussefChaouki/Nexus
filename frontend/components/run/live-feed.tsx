@@ -15,6 +15,8 @@ interface Props {
   target: string;
 }
 
+const REDIRECT_DELAY_MS = 1600;
+
 export function LiveFeed({ sessionId, target }: Props) {
   const state = useAnalyzeStream(target, sessionId);
   const router = useRouter();
@@ -41,12 +43,13 @@ export function LiveFeed({ sessionId, target }: Props) {
     feedRef.current.scrollTop = feedRef.current.scrollHeight;
   }, [state.events.length]);
 
-  // Navigate to the report viewer when complete.
+  // Navigate to the report viewer when complete — after a short beat so
+  // the completion banner registers before the context switches.
   useEffect(() => {
     if (state.status === "completed" && state.reportId) {
       const t = window.setTimeout(() => {
         router.push(`/reports/${state.reportId}`);
-      }, 1200);
+      }, REDIRECT_DELAY_MS);
       return () => window.clearTimeout(t);
     }
   }, [state.status, state.reportId, router]);
@@ -110,11 +113,12 @@ export function LiveFeed({ sessionId, target }: Props) {
           </div>
           <div
             ref={feedRef}
+            aria-live="polite"
             className="flex-1 py-ds-4 overflow-y-auto max-h-[600px]"
           >
             {state.events.length === 0 && (
               <div className="px-ds-5 py-ds-5 text-fg-faint text-[12px] uppercase tracking-[0.1em]">
-                waiting for first event…
+                waiting for first event<span className="animate-blink">…</span>
               </div>
             )}
             {state.events.map((ev, i) => (
@@ -126,8 +130,30 @@ export function LiveFeed({ sessionId, target }: Props) {
               />
             ))}
             {state.status === "error" && (
-              <div className="px-ds-5 py-ds-4 text-sev-critical text-[12.5px]">
-                stream failed{state.error ? ` — ${state.error}` : ""}
+              <div className="mx-ds-5 mt-ds-3 px-ds-4 py-ds-3 border border-sev-critical/40 bg-sev-critical/[0.05] text-sev-critical text-[12.5px] feed-enter">
+                <span className="uppercase tracking-[0.12em] text-[10.5px] font-semibold mr-ds-2">
+                  ✕ stream failed
+                </span>
+                {state.error ?? "connection lost"}
+              </div>
+            )}
+            {state.status === "completed" && (
+              <div className="mx-ds-5 mt-ds-3 px-ds-4 py-ds-3 border border-agent-writer/40 bg-agent-writer/[0.05] text-agent-writer text-[12.5px] feed-enter flex items-baseline gap-ds-3 flex-wrap">
+                <span className="uppercase tracking-[0.12em] text-[10.5px] font-semibold">
+                  ✓ report ready
+                </span>
+                <span className="text-fg-muted">
+                  opening report viewer<span className="animate-blink">…</span>
+                </span>
+                <span
+                  aria-hidden
+                  className="ml-auto h-[2px] w-[72px] bg-bg-deep overflow-hidden self-center"
+                >
+                  <span
+                    className="block h-full bg-agent-writer origin-left animate-bar-grow"
+                    style={{ animationDuration: `${REDIRECT_DELAY_MS}ms` }}
+                  />
+                </span>
               </div>
             )}
           </div>
