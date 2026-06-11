@@ -111,12 +111,17 @@ class _FakeRoutingLLM:
 
     def __init__(self) -> None:
         self.analyst_calls = 0
+        self.analyst_gate_calls = 0
         self.calls: list[str] = []
 
     async def ainvoke(self, prompt: str, **_: Any) -> _FakeResp:
         self.calls.append(prompt)
         if "Planner agent" in prompt:
             return _FakeResp(json.dumps(_PLANNER_TASKS))
+        if "gate the Analyst" in prompt:
+            # S8.T2 relevance gate — always on-topic for the canned fixtures.
+            self.analyst_gate_calls += 1
+            return _FakeResp("yes - findings match the fixture target")
         if "Analyst agent" in prompt:
             self.analyst_calls += 1
             focus = _extract_focus_area(prompt)
@@ -183,7 +188,10 @@ class ContextAwareMockLLM(_FakeRoutingLLM):
             return _FakeResp(json.dumps(list(OWASP_LLM_TOP10)))
         if "Planner agent" in prompt:
             self.agent_calls.append("planner")
-        elif "Analyst agent" in prompt:
+        elif "gate the Analyst" in prompt or "Analyst agent" in prompt:
+            # Both the relevance gate and the synthesis call run inside the
+            # Analyst node — tag them identically so transition assertions
+            # reflect graph-level node ordering.
             self.agent_calls.append("analyst")
         else:
             # Researcher relevance scoring — single-number response.
