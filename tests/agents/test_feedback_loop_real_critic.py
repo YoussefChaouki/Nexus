@@ -226,17 +226,33 @@ async def test_two_iterations_then_approve() -> None:
     assert llm.critic_eval_calls == 2
     assert report.critic_report.recommendation == Recommendation.APPROVE
 
-    plan_ids = {t.id for t in final["plan"]}
+    # The spy keeps the per-iteration task lists; final["plan"] now holds
+    # their union because the Researcher merges executed re-research tasks.
+    original_plan_ids = {t.id for t in researcher.task_lists_seen[0]}
+    re_research_ids = {t.id for t in researcher.task_lists_seen[1]}
     findings = final["findings"]
-    iter1_finding_ids = {f.id for f in findings if f.task_id in plan_ids}
-    iter2_finding_ids = {f.id for f in findings if f.task_id not in plan_ids}
+    iter1_finding_ids = {f.id for f in findings if f.task_id in original_plan_ids}
+    iter2_finding_ids = {f.id for f in findings if f.task_id in re_research_ids}
     assert iter1_finding_ids
     assert iter2_finding_ids
     assert len(findings) > researcher.findings_before_iteration[1]
+    assert {t.id for t in final["plan"]} == original_plan_ids | re_research_ids
 
     surface_evidence_ids = {e.id for s in final["threat_surfaces"] for e in s.evidence}
     assert surface_evidence_ids & iter1_finding_ids
     assert surface_evidence_ids & iter2_finding_ids
+
+    # The point of the merge: re-research findings group under their real
+    # focus area, so at least one surface credits MODEL_EXTRACTION (the
+    # category the critic asked to re-research) instead of OTHER.
+    task_focus = {t.id: t.focus_area for t in final["plan"]}
+    surfaced_focus = {
+        task_focus[e.task_id]
+        for s in final["threat_surfaces"]
+        for e in s.evidence
+        if e.task_id in task_focus
+    }
+    assert FocusArea.MODEL_EXTRACTION in surfaced_focus
 
 
 async def test_max_iterations_forced_termination() -> None:
@@ -268,19 +284,20 @@ async def test_re_research_uses_critic_tasks_not_original_plan() -> None:
     assert len(researcher.task_lists_seen) == 2
     iter1_tasks, iter2_tasks = researcher.task_lists_seen
 
-    plan_ids = {t.id for t in final["plan"]}
     iter1_ids = {t.id for t in iter1_tasks}
     iter2_ids = {t.id for t in iter2_tasks}
 
-    assert iter1_ids == plan_ids
-    assert iter2_ids.isdisjoint(plan_ids)
-    assert iter1_ids != iter2_ids
+    # Iteration 2 ran the critic's re_research_tasks — disjoint from the
+    # original plan captured by the spy at iteration 1.
+    assert iter2_ids.isdisjoint(iter1_ids)
     # Iteration 2 runs the critic's re_research_tasks: the LLM's
     # model_extraction task plus the S10 deterministic supplements that
     # target the remaining uncovered OWASP categories — never plan tasks.
     assert FocusArea.MODEL_EXTRACTION in {t.focus_area for t in iter2_tasks}
-    plan_descriptions = {t.description for t in final["plan"]}
-    assert all(t.description not in plan_descriptions for t in iter2_tasks)
+    original_descriptions = {t.description for t in iter1_tasks}
+    assert all(t.description not in original_descriptions for t in iter2_tasks)
+    # After the run the plan holds both lists (re-research merge).
+    assert {t.id for t in final["plan"]} == iter1_ids | iter2_ids
 
 
 async def test_findings_are_cumulative_across_iterations() -> None:

@@ -17,9 +17,11 @@ from nexus.agents.analyst import AnalystAgent
 from nexus.exceptions import AgentError
 from nexus.schemas.models import (
     AgentState,
+    CriticReport,
     FindingResult,
     FocusArea,
     Priority,
+    Recommendation,
     ResearchTask,
     SourceType,
     ThreatPattern,
@@ -117,6 +119,7 @@ def _state(
     plan: list[ResearchTask],
     findings: list[FindingResult],
     iteration_count: int = 1,
+    critic_report: CriticReport | None = None,
 ) -> AgentState:
     return cast(
         AgentState,
@@ -127,7 +130,7 @@ def _state(
             "plan": plan,
             "findings": findings,
             "threat_surfaces": [],
-            "critic_report": None,
+            "critic_report": critic_report,
             "threat_report": None,
             "iteration_count": iteration_count,
             "should_continue": True,
@@ -587,6 +590,117 @@ async def test_analyst_keeps_on_target_group_when_gate_says_yes() -> None:
 
     assert len(out["threat_surfaces"]) == 1
     assert out["threat_surfaces"][0].name == "Prompt Injection"
+
+
+async def test_analyst_defaults_null_owasp_from_focus_area() -> None:
+    """A null owasp_category on a mappable focus area gets the canonical code.
+
+    Production regression: GPT-4o reads infra-style threats (endpoint
+    flooding, SQL injection) as outside the OWASP *LLM* taxonomy and
+    returns null — the Critic's coverage score then can't credit the
+    surface and the loop freezes at a low score.
+    """
+    plan = [_task(FocusArea.DENIAL_OF_SERVICE, task_id="task-dos")]
+    findings = _strong_findings("task-dos")
+    llm = _FakeLLM(json.dumps(_surface_payload(name="Endpoint Flooding", owasp=None)))
+
+    out = await AnalystAgent(llm=llm).run(_state(plan=plan, findings=findings))
+
+    assert out["threat_surfaces"][0].owasp_category == "LLM04"
+
+
+async def test_analyst_keeps_explicit_owasp_category() -> None:
+    """An LLM-provided category must never be overwritten by the default."""
+    plan = [_task(FocusArea.INJECTION, task_id="task-inj")]
+    findings = _strong_findings("task-inj")
+    llm = _FakeLLM(json.dumps(_surface_payload(owasp="LLM02")))
+
+    out = await AnalystAgent(llm=llm).run(_state(plan=plan, findings=findings))
+
+    assert out["threat_surfaces"][0].owasp_category == "LLM02"
+
+
+async def test_analyst_other_focus_area_keeps_null_owasp() -> None:
+    """FocusArea.OTHER has no canonical category — null stays null."""
+    plan = [_task(FocusArea.OTHER, task_id="task-other")]
+    findings = _strong_findings("task-other")
+    llm = _FakeLLM(json.dumps(_surface_payload(name="Misc Threat", owasp=None)))
+
+    out = await AnalystAgent(llm=llm).run(_state(plan=plan, findings=findings))
+
+    assert out["threat_surfaces"][0].owasp_category is None
+
+
+async def test_analyst_other_group_prompt_lists_candidate_categories() -> None:
+    """OTHER has no canonical default — the prompt must offer LLM02/07/08/09."""
+    plan = [_task(FocusArea.OTHER, task_id="task-other")]
+    findings = _strong_findings("task-other")
+    llm = _FakeLLM(json.dumps(_surface_payload(name="Excessive Agency", owasp="LLM08")))
+
+    agent = AnalystAgent(llm=llm)
+    await agent.run(_state(plan=plan, findings=findings))
+
+    prompt = agent.last_prompts[0]
+    for cat in ("LLM02", "LLM07", "LLM08", "LLM09"):
+        assert cat in prompt
+
+
+async def test_analyst_non_other_group_prompt_has_no_other_hint() -> None:
+    plan = [_task(FocusArea.INJECTION, task_id="task-inj")]
+    findings = _strong_findings("task-inj")
+    llm = _FakeLLM(json.dumps(_surface_payload()))
+
+    agent = AnalystAgent(llm=llm)
+    await agent.run(_state(plan=plan, findings=findings))
+
+    assert "excessive agency" not in agent.last_prompts[0]
+
+
+async def test_analyst_gate_bypassed_for_critic_demanded_focus_area() -> None:
+    """A focus area the Critic re-researched must never be gate-skipped.
+
+    Production regression: data_leakage was gated out three passes in a
+    row on a target where the Critic explicitly demanded it — coverage
+    could never improve and the loop burned its iterations.
+    """
+    plan = [_task(FocusArea.DATA_LEAKAGE, task_id="task-leak")]
+    findings = [_finding("task-leak", ident="cve-weak", score=0.5)]
+    critic = CriticReport(
+        overall_score=0.2,
+        gaps=["LLM06 not covered"],
+        recommendation=Recommendation.RE_RESEARCH,
+        re_research_tasks=[_task(FocusArea.DATA_LEAKAGE, task_id="task-redo")],
+    )
+    # A 'no' is queued: it must NOT be consumed because the gate is bypassed.
+    llm = _FakeLLM(
+        [json.dumps(_surface_payload(name="Data Leakage", owasp="LLM06"))],
+        relevance_responses=["no - would normally be skipped"],
+    )
+
+    out = await AnalystAgent(llm=llm).run(
+        _state(plan=plan, findings=findings, iteration_count=2, critic_report=critic),
+    )
+
+    assert len(out["threat_surfaces"]) == 1
+    assert out["threat_surfaces"][0].name == "Data Leakage"
+    assert llm.relevance_responses == ["no - would normally be skipped"], (
+        "gate must not even be consulted for critic-demanded focus areas"
+    )
+
+
+async def test_analyst_gate_prompt_tolerates_weak_evidence() -> None:
+    """The gate must only reject unrelated domains, not thin evidence."""
+    plan = [_task(FocusArea.INJECTION, task_id="task-inj")]
+    findings = _strong_findings("task-inj")
+    llm = _FakeLLM([json.dumps(_surface_payload())])
+
+    agent = AnalystAgent(llm=llm)
+    await agent.run(_state(plan=plan, findings=findings))
+
+    gate_prompt = next(c for c in llm.calls if "You gate the Analyst" in c)
+    assert "unrelated domain" in gate_prompt
+    assert "NOT a reason to answer no" in gate_prompt
+    assert "When in doubt, answer yes" in gate_prompt
 
 
 async def test_analyst_gate_failure_falls_back_to_keeping_group() -> None:

@@ -65,6 +65,20 @@ _SEVERITY_ORDER: list[Severity] = [
 _MIN_EVIDENCE_FOR_FULL_BAND = 2
 _MIN_TOP_RELEVANCE_FOR_FULL_BAND = 0.6
 
+# Canonical OWASP LLM Top 10 category per focus area. Used as the
+# deterministic fallback when the LLM emits a null owasp_category for a
+# surface that plainly maps to one (an unauth DoS on an LLM service IS
+# LLM04) — the Critic's coverage score counts owasp_category fields, so
+# null surfaces silently freeze the feedback loop. OTHER stays None.
+_FOCUS_TO_OWASP: dict[FocusArea, str | None] = {
+    FocusArea.INJECTION: "LLM01",
+    FocusArea.DATA_LEAKAGE: "LLM06",
+    FocusArea.SUPPLY_CHAIN: "LLM05",
+    FocusArea.DENIAL_OF_SERVICE: "LLM04",
+    FocusArea.MODEL_EXTRACTION: "LLM10",
+    FocusArea.OTHER: None,
+}
+
 
 class AnalystAgent(AgentBase):
     """Synthesises FindingResult groups into ThreatSurface entries."""
@@ -98,10 +112,25 @@ class AnalystAgent(AgentBase):
             raise AgentError("AnalystAgent requires a non-empty plan in state")
 
         groups = _group_by_focus_area(state["findings"], state["plan"])
+        # Focus areas the Critic explicitly demanded via re_research_tasks
+        # bypass the relevance gate: skipping a category the Critic just
+        # asked to cover guarantees a wasted iteration (observed in prod —
+        # data_leakage gated out three passes in a row).
+        critic = state["critic_report"]
+        demanded: set[FocusArea] = (
+            {t.focus_area for t in critic.re_research_tasks} if critic is not None else set()
+        )
         self.last_prompts = []
         surfaces: list[ThreatSurface] = []
         for focus_area, findings in groups.items():
-            if not await self._group_is_relevant(focus_area, findings, state):
+            if focus_area in demanded:
+                self._logger.info(
+                    "analyst_gate_bypassed",
+                    session_id=state["session_id"],
+                    focus_area=focus_area.value,
+                    reason="critic_demanded_re_research",
+                )
+            elif not await self._group_is_relevant(focus_area, findings, state):
                 self._logger.info(
                     "analyst_skipped_off_target",
                     session_id=state["session_id"],
@@ -200,9 +229,15 @@ class AnalystAgent(AgentBase):
             f"Focus area: {focus_area.value}\n\n"
             "Findings collected by the Researcher:\n"
             f"{bullets}\n\n"
-            "Are these findings actually relevant to threat-modelling the "
-            "target above? Reply on a single line in the form "
-            "'yes - <one-sentence why>' or 'no - <one-sentence why>'."
+            "Could a meaningful threat surface for this focus area on this "
+            "target be built from these findings?\n"
+            "Answer 'no' ONLY when the findings clearly belong to an "
+            "unrelated domain (e.g. mobile-banking malware for a RAG "
+            "pipeline). Thin, weak, or generic evidence is NOT a reason to "
+            "answer no — severity calibration downgrades weak evidence "
+            "downstream. When in doubt, answer yes.\n"
+            "Reply on a single line in the form 'yes - <one-sentence why>' "
+            "or 'no - <one-sentence why>'."
         )
 
     # ----- LLM synthesis ----------------------------------------------------
@@ -256,6 +291,21 @@ class AnalystAgent(AgentBase):
         # at the top.
         ranked = sorted(findings, key=lambda f: f.relevance_score, reverse=True)
         payload["evidence"] = [f.model_dump() for f in ranked]
+
+        # Deterministic OWASP fallback — GPT-4o reads infra-style threats
+        # (SQL injection, endpoint flooding) as outside the OWASP *LLM*
+        # taxonomy and returns null, which the Critic's coverage score
+        # then can't credit.
+        if not payload.get("owasp_category"):
+            default_owasp = _FOCUS_TO_OWASP.get(focus_area)
+            if default_owasp is not None:
+                payload["owasp_category"] = default_owasp
+                self._logger.info(
+                    "analyst_owasp_defaulted",
+                    session_id=state["session_id"],
+                    focus_area=focus_area.value,
+                    owasp_category=default_owasp,
+                )
 
         downgraded = _maybe_downgrade(payload, findings)
         if downgraded is not None:
@@ -322,7 +372,14 @@ class AnalystAgent(AgentBase):
             "default to HIGH. If the evidence does not demonstrate impact at "
             "a band for THIS target, pick the lower one.\n"
             "Pick owasp_category from the OWASP LLM Top 10 (e.g. LLM01, "
-            "LLM02, LLM06, ...) when applicable; otherwise use null.\n"
+            "LLM02, LLM06, ...). Judge the threat IN THE CONTEXT of the LLM "
+            "service: an unauthenticated DoS on an LLM API is LLM04, data "
+            "exfiltration through the LLM context is LLM06. Default mapping "
+            "by focus area when nothing more specific applies: "
+            "injection→LLM01, data_leakage→LLM06, dos→LLM04, "
+            "supply_chain→LLM05, model_extraction→LLM10. "
+            f"{_other_owasp_hint(focus_area)}"
+            "Use null only when no LLM-specific category fits at all.\n"
             "Return ONLY a JSON object with keys: name, description, "
             "severity, severity_reasoning, attack_vectors, mitigations, "
             "cvss_score (0-10 or null), owasp_category. "
@@ -381,6 +438,23 @@ Example 3 — MEDIUM
 
 
 # --- helpers ---------------------------------------------------------------
+
+
+def _other_owasp_hint(focus_area: FocusArea) -> str:
+    """Category guidance for the OTHER group, which has no canonical default.
+
+    LLM02/07/08/09 all map to FocusArea.OTHER — without an explicit label
+    from the LLM these surfaces stay null and the Critic's coverage score
+    can never credit them, freezing the feedback loop below threshold.
+    """
+    if focus_area is not FocusArea.OTHER:
+        return ""
+    return (
+        "For this 'other' focus area, choose the BEST-FITTING of: LLM02 "
+        "(insecure output handling), LLM07 (insecure plugin design), LLM08 "
+        "(excessive agency — autonomous tools, no human approval), LLM09 "
+        "(overreliance). "
+    )
 
 
 def _maybe_downgrade(

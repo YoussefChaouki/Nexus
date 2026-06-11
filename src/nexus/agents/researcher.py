@@ -39,8 +39,6 @@ _CONTEXT_EMBED_CHARS = 600
 # Schema allows 1-3 search_queries per task; cap defensively so a rogue
 # plan can't multiply MCP fan-out unboundedly.
 _MAX_QUERIES_PER_TASK = 3
-# Bounded concurrency for per-finding LLM scoring and embedding calls.
-_PER_FINDING_CONCURRENCY = 8
 
 _FLOAT_RE = re.compile(r"\d*\.?\d+")
 
@@ -140,6 +138,7 @@ class ResearcherAgent(AgentBase):
             {
                 **state,
                 "findings": merged,
+                "plan": _merge_into_plan(list(state["plan"]), tasks),
                 "iteration_count": state["iteration_count"] + 1,
             },
         )
@@ -234,7 +233,7 @@ class ResearcherAgent(AgentBase):
         finding — which dominated pipeline latency on large fan-outs.
         """
         task_by_id = {t.id: t for t in tasks}
-        semaphore = asyncio.Semaphore(_PER_FINDING_CONCURRENCY)
+        semaphore = asyncio.Semaphore(get_settings().llm_concurrency)
 
         async def _score_one(finding: FindingResult) -> FindingResult:
             task = task_by_id.get(finding.task_id)
@@ -301,7 +300,7 @@ class ResearcherAgent(AgentBase):
             )
             return score_kept, dropped
 
-        semaphore = asyncio.Semaphore(_PER_FINDING_CONCURRENCY)
+        semaphore = asyncio.Semaphore(get_settings().llm_concurrency)
         embed_fn = self._embed_fn
 
         async def _embed_one(f: FindingResult) -> list[float] | None:
@@ -392,6 +391,25 @@ class ResearcherAgent(AgentBase):
 
 
 # --- helpers ---------------------------------------------------------------
+
+
+def _merge_into_plan(
+    plan: list[ResearchTask],
+    executed: list[ResearchTask],
+) -> list[ResearchTask]:
+    """Append executed tasks the plan doesn't know yet (re-research tasks).
+
+    Downstream consumers resolve findings through a ``task_id → plan``
+    lookup: the Analyst to group findings by focus_area, the Writer to
+    derive ``focus_areas_covered``. Critic-issued re_research_tasks never
+    entered the plan, so every re-research finding fell back to
+    FocusArea.OTHER — the Analyst could not credit it to the OWASP
+    category the Critic asked for, and coverage could not improve across
+    iterations. First-run tasks are already in the plan and are skipped.
+    """
+    known = {t.id for t in plan}
+    plan.extend(t for t in executed if t.id not in known)
+    return plan
 
 
 def _queries_for(task: ResearchTask) -> list[str]:

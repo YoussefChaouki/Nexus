@@ -209,6 +209,43 @@ async def test_re_research_uses_critic_tasks_only() -> None:
     assert out["iteration_count"] == 2
 
 
+async def test_re_research_tasks_are_merged_into_plan() -> None:
+    """Executed re-research tasks must join state['plan'].
+
+    Downstream task_id lookups (Analyst grouping, Writer focus_areas)
+    resolve through the plan; without the merge every re-research finding
+    fell back to FocusArea.OTHER and coverage never improved.
+    """
+    plan = [_make_task(FocusArea.INJECTION)]
+    re_research = [_make_task(FocusArea.MODEL_EXTRACTION, "model extraction")]
+    critic = CriticReport(
+        overall_score=0.2,
+        gaps=["model extraction not covered"],
+        recommendation=Recommendation.RE_RESEARCH,
+        re_research_tasks=re_research,
+    )
+    fake = FakeMCPClient(responses=_all_three_responses())
+    agent = ResearcherAgent(mcp_client=fake, scoring_fn=_fixed_score)
+
+    out = await agent.run(_state(plan=plan, iteration_count=1, critic_report=critic))
+
+    plan_ids = {t.id for t in out["plan"]}
+    assert plan_ids == {plan[0].id, re_research[0].id}
+    # Re-running the same tasks must not duplicate plan entries.
+    out2 = await agent.run({**out, "critic_report": critic})
+    assert len(out2["plan"]) == len(out["plan"])
+
+
+async def test_first_run_leaves_plan_unchanged() -> None:
+    plan = [_make_task(FocusArea.INJECTION), _make_task(FocusArea.SUPPLY_CHAIN, "supply chain")]
+    fake = FakeMCPClient(responses=_all_three_responses())
+    agent = ResearcherAgent(mcp_client=fake, scoring_fn=_fixed_score)
+
+    out = await agent.run(_state(plan=plan))
+
+    assert [t.id for t in out["plan"]] == [t.id for t in plan]
+
+
 async def test_iteration_count_is_incremented_on_first_run() -> None:
     plan = [_make_task(FocusArea.INJECTION)]
     fake = FakeMCPClient(responses=_all_three_responses())
