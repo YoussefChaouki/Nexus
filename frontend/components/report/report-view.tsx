@@ -2,11 +2,13 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import { Pill } from "@/components/ui/pill";
 import { StatusBar, StatusItem, StatusSep } from "@/components/ui/status-bar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { SeverityRow } from "./severity-row";
+import { SeverityBar } from "@/components/ui/severity-bar";
+import { CriticGauge } from "./critic-gauge";
 import { MetaChip } from "./meta-chip";
 import { SurfaceList } from "./surface-list";
 import type { ThreatReportSummary } from "@/lib/schemas";
@@ -28,11 +30,33 @@ const FOCUS_LABEL: Record<string, string> = {
 
 export function ReportView({ report }: Props) {
   const router = useRouter();
+  const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<number | null>(null);
   const total = Object.values(report.severity_breakdown).reduce(
     (acc, v) => acc + v,
     0,
   );
   const traceUrl = langfuseTraceUrl(report.id);
+
+  useEffect(
+    () => () => {
+      if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+    },
+    [],
+  );
+
+  function copyJson() {
+    navigator.clipboard
+      ?.writeText(JSON.stringify(report, null, 2))
+      .then(() => {
+        setCopied(true);
+        if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+        copiedTimer.current = window.setTimeout(() => setCopied(false), 1600);
+      })
+      .catch(() => {
+        // Clipboard unavailable (insecure context) — leave the label as-is.
+      });
+  }
 
   return (
     <>
@@ -69,7 +93,7 @@ export function ReportView({ report }: Props) {
         </span>
       </StatusBar>
 
-      <section className="mt-ds-4 border border-border bg-bg-card px-ds-6 py-ds-6">
+      <section className="mt-ds-4 border border-border bg-bg-card px-ds-6 py-ds-6 reveal reveal-1">
         <header className="flex items-center justify-between mb-ds-5 flex-wrap gap-ds-2">
           <div className="text-[11px] uppercase tracking-[0.1em] text-agent-writer before:content-['●_']">
             Report ready
@@ -86,17 +110,30 @@ export function ReportView({ report }: Props) {
           {report.target_description}
         </blockquote>
 
-        <div className="flex items-center gap-ds-3 flex-wrap">
-          <SeverityRow breakdown={report.severity_breakdown} />
-          <span className="ml-auto inline-flex gap-ds-2 flex-wrap">
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-ds-5 items-start">
+          <div>
+            <div className="text-[10.5px] uppercase tracking-[0.14em] text-fg-faint mb-ds-2">
+              ─ severity spectrum
+            </div>
+            <SeverityBar breakdown={report.severity_breakdown} />
+          </div>
+          <span className="inline-flex gap-ds-2 flex-wrap">
             <MetaChip label="Surfaces" value={report.surface_count} />
             <MetaChip label="Focus areas" value={report.focus_areas_covered.length} />
             <MetaChip label="Vectors" value={report.top_attack_vectors.length} />
           </span>
         </div>
 
+        {typeof report.overall_critic_score === "number" && (
+          <CriticGauge
+            score={report.overall_critic_score}
+            iterationCount={report.iteration_count}
+            className="mt-ds-5 pt-ds-4 border-t border-border"
+          />
+        )}
+
         {report.focus_areas_covered.length > 0 && (
-          <div className="mt-ds-6 flex items-center gap-ds-2 flex-wrap">
+          <div className="mt-ds-5 flex items-center gap-ds-2 flex-wrap">
             <span className="text-[10.5px] uppercase tracking-[0.14em] text-fg-faint mr-ds-2">
               ─ focus areas covered
             </span>
@@ -109,7 +146,7 @@ export function ReportView({ report }: Props) {
         )}
       </section>
 
-      <section className="mt-ds-6">
+      <section className="mt-ds-6 reveal reveal-2">
         <div className="flex items-center gap-ds-3 mb-ds-4">
           <span aria-hidden className="text-fg-faint">─</span>
           <span className="text-[11px] uppercase tracking-[0.16em] text-fg-muted font-medium">
@@ -123,7 +160,7 @@ export function ReportView({ report }: Props) {
         <SurfaceList vectors={report.top_attack_vectors} />
       </section>
 
-      <footer className="mt-ds-6 border border-border bg-bg-deep px-ds-5 py-ds-4 flex items-center justify-between gap-ds-5 flex-wrap text-[11px] text-fg-muted tracking-[0.04em]">
+      <footer className="mt-ds-6 border border-border bg-bg-deep px-ds-5 py-ds-4 flex items-center justify-between gap-ds-5 flex-wrap text-[11px] text-fg-muted tracking-[0.04em] reveal reveal-3">
         <div className="flex gap-ds-5 flex-wrap">
           <FooterStat label="Report ID" value={shortId(report.id)} />
           <FooterStat label="Surfaces" value={report.surface_count} />
@@ -136,11 +173,11 @@ export function ReportView({ report }: Props) {
           </Button>
           <Button
             variant="secondary"
-            onClick={() => {
-              navigator.clipboard?.writeText(JSON.stringify(report, null, 2));
-            }}
+            onClick={copyJson}
+            aria-live="polite"
+            className={copied ? "border-agent-writer text-agent-writer" : undefined}
           >
-            Copy JSON
+            {copied ? "✓ Copied" : "Copy JSON"}
           </Button>
           {traceUrl && (
             <Link

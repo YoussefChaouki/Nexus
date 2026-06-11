@@ -2,11 +2,13 @@ import Link from "next/link";
 import { Pill } from "@/components/ui/pill";
 import { StatusBar, StatusItem, StatusSep } from "@/components/ui/status-bar";
 import { SeverityBadge } from "@/components/ui/badge";
+import { SeverityBar } from "@/components/ui/severity-bar";
 import {
   listReports,
   ApiError,
   type ListReportsParams,
 } from "@/lib/api";
+import { relativeTime } from "@/lib/format";
 import {
   FocusAreaEnum,
   SeverityEnum,
@@ -176,21 +178,27 @@ export default async function HistoryPage({
                   <th className="text-left px-ds-5 py-ds-3 border-b border-border font-medium">
                     Severity
                   </th>
+                  <th className="text-right px-ds-5 py-ds-3 border-b border-border font-medium">
+                    Score
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((row) => (
                   <tr
                     key={row.id}
-                    className="border-b border-border last:border-b-0 hover:bg-bg-elev transition-colors"
+                    className="group border-b border-border last:border-b-0 hover:bg-bg-elev transition-colors"
                   >
-                    <td className="px-ds-5 py-ds-3 tabular text-fg-muted whitespace-nowrap">
-                      {formatTimestamp(row.created_at)}
+                    <td
+                      className="px-ds-5 py-ds-3 tabular text-fg-muted whitespace-nowrap border-l-2 border-transparent group-hover:border-accent transition-colors"
+                      title={formatTimestamp(row.created_at)}
+                    >
+                      {relativeTime(row.created_at)}
                     </td>
                     <td className="px-ds-5 py-ds-3">
                       <Link
                         href={`/reports/${encodeURIComponent(row.id)}` as never}
-                        className="text-fg hover:text-accent transition-colors"
+                        className="text-fg group-hover:text-accent transition-colors"
                       >
                         {truncate(row.target_description, 80)}
                       </Link>
@@ -199,17 +207,22 @@ export default async function HistoryPage({
                       {row.surface_count}
                     </td>
                     <td className="px-ds-5 py-ds-3">
-                      <div className="flex flex-wrap gap-ds-2">
-                        {SEVERITIES.map((sev) =>
-                          (row.severity_breakdown[sev] ?? 0) > 0 ? (
-                            <SeverityBadge
-                              key={sev}
-                              severity={sev}
-                              count={row.severity_breakdown[sev]}
-                            />
-                          ) : null,
-                        )}
-                      </div>
+                      <SeverityBar breakdown={row.severity_breakdown} size="mini" />
+                    </td>
+                    <td className="px-ds-5 py-ds-3 text-right tabular whitespace-nowrap">
+                      {typeof row.overall_critic_score === "number" ? (
+                        <span
+                          className={
+                            row.overall_critic_score >= 0.6
+                              ? "text-agent-writer"
+                              : "text-sev-high"
+                          }
+                        >
+                          {row.overall_critic_score.toFixed(2)}
+                        </span>
+                      ) : (
+                        <span className="text-fg-faint">—</span>
+                      )}
                     </td>
                   </tr>
                 ))}

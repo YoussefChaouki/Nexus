@@ -77,6 +77,32 @@
   input:focus {
     outline: none;
   }
+
+  /* Keyboard-only focus ring — coherent with the hairline aesthetic. */
+  :focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  /* Thin terminal scrollbar — the default chrome bar breaks the hairline look. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-emph) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: var(--border-emph);
+    border-radius: 0;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: var(--fg-faint);
+  }
 }
 
 @layer utilities {
@@ -91,5 +117,55 @@
   }
   .hairline-b {
     border-bottom: 1px solid var(--border);
+  }
+
+  /* Staggered page-load reveal. Apply .reveal + a .reveal-N delay step.
+     One orchestrated entrance per page — not scattered micro-motion. */
+  .reveal {
+    animation: reveal 0.5s cubic-bezier(0.2, 0.65, 0.25, 1) both;
+  }
+  .reveal-1 { animation-delay: 0.05s; }
+  .reveal-2 { animation-delay: 0.12s; }
+  .reveal-3 { animation-delay: 0.2s; }
+  .reveal-4 { animation-delay: 0.3s; }
+  .reveal-5 { animation-delay: 0.42s; }
+
+  /* Single event-row entrance for the live feed (slide from the rail). */
+  .feed-enter {
+    animation: feed-enter 0.28s cubic-bezier(0.2, 0.65, 0.25, 1) both;
+  }
+}
+
+@keyframes reveal {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes feed-enter {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal,
+  .reveal-1,
+  .reveal-2,
+  .reveal-3,
+  .reveal-4,
+  .reveal-5,
+  .feed-enter {
+    animation: none;
   }
 }

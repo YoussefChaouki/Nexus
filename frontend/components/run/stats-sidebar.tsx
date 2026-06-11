@@ -4,8 +4,6 @@ import { cn } from "@/lib/cn";
 import type { StreamState } from "@/lib/use-analyze-stream";
 import { isKnownAgent } from "@/lib/schemas";
 
-const ORDER = ["planner", "researcher", "analyst", "critic", "writer"] as const;
-
 const AGENT_COLOR: Record<string, string> = {
   planner: "text-agent-planner",
   researcher: "text-agent-researcher",
@@ -31,9 +29,6 @@ export function StatsSidebar({ state, maxIterations = 3 }: Props) {
   const active = state.activeAgent && isKnownAgent(state.activeAgent)
     ? state.activeAgent
     : null;
-
-  const stageIndex = active ? ORDER.indexOf(active) : -1;
-  const progress = Math.min(1, (stageIndex + 1) / ORDER.length);
 
   return (
     <aside className="border border-border bg-bg-card h-fit sticky top-[80px]">
@@ -88,20 +83,21 @@ export function StatsSidebar({ state, maxIterations = 3 }: Props) {
       />
       <Row label="Events" value={state.events.length} />
 
-      <div className="px-ds-4 py-ds-4 border-t border-border">
-        <div className="text-[10.5px] uppercase tracking-[0.08em] text-fg-faint">
-          Progress
-        </div>
-        <div className="mt-ds-2 h-[2px] bg-bg-deep w-full overflow-hidden">
-          <div
-            className="h-full bg-accent transition-all duration-500"
-            style={{ width: `${(progress * 100).toFixed(0)}%` }}
-          />
-        </div>
-        <div className="flex justify-between mt-ds-2 text-[10.5px] text-fg-faint tracking-[0.06em]">
-          <span>{Math.round(progress * 100)}%</span>
-          <span>{state.status}</span>
-        </div>
+      <div className="px-ds-4 py-ds-3 border-t border-border flex items-baseline justify-between">
+        <span className="text-[10.5px] uppercase tracking-[0.08em] text-fg-faint">
+          Status
+        </span>
+        <span
+          className={cn(
+            "text-[11px] uppercase tracking-[0.1em] font-medium",
+            state.status === "completed" && "text-agent-writer",
+            state.status === "error" && "text-sev-critical",
+            state.status === "streaming" && "text-accent",
+            state.status === "connecting" && "text-fg-muted",
+          )}
+        >
+          {state.status}
+        </span>
       </div>
     </aside>
   );

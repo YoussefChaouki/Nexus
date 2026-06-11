@@ -30,7 +30,7 @@ export function EventRow({ event, startedAt, isLast }: EventRowProps) {
     <div
       className={cn(
         "grid grid-cols-[90px_116px_1fr] gap-ds-4 px-ds-5 py-[8px]",
-        "items-baseline text-[12.5px] border-l-2",
+        "items-baseline text-[12.5px] border-l-2 feed-enter",
         isLast && event.event_type !== "completed" && event.event_type !== "error"
           ? "bg-agent-writer/[0.04] border-agent-writer"
           : "border-transparent",
