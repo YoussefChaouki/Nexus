@@ -6,6 +6,7 @@ import { useAnalyzeStream } from "@/lib/use-analyze-stream";
 import { Pill } from "@/components/ui/pill";
 import { StatusBar, StatusItem, StatusSep } from "@/components/ui/status-bar";
 import { EventRow } from "./event-row";
+import { PipelineRail } from "./pipeline-rail";
 import { StatsSidebar } from "./stats-sidebar";
 import { formatElapsed } from "@/lib/format";
 
@@ -87,6 +88,8 @@ export function LiveFeed({ sessionId, target }: Props) {
           </StatusItem>
         </span>
       </StatusBar>
+
+      <PipelineRail state={state} />
 
       <div className="mt-ds-4 grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-ds-4">
         <section className="border border-border bg-bg-card min-h-[600px] flex flex-col">
