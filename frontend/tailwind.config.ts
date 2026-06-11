@@ -113,6 +113,14 @@ const config: Config = {
           "90%": { opacity: "1" },
           "100%": { left: "calc(100% + 10px)", opacity: "0" },
         },
+        "rail-flow": {
+          "0%": { backgroundPosition: "0 0" },
+          "100%": { backgroundPosition: "16px 0" },
+        },
+        "bar-grow": {
+          from: { transform: "scaleX(0)" },
+          to: { transform: "scaleX(1)" },
+        },
       },
       animation: {
         "pulse-soft": "pulse 1.6s ease-in-out infinite",
@@ -120,6 +128,8 @@ const config: Config = {
         scanline: "scanline 9s linear infinite",
         pipeflow: "pipeflow 4.5s linear infinite",
         blip: "blip 4.5s linear infinite",
+        "rail-flow": "rail-flow 0.9s linear infinite",
+        "bar-grow": "bar-grow 0.7s cubic-bezier(0.2, 0.65, 0.25, 1) both",
       },
     },
   },
