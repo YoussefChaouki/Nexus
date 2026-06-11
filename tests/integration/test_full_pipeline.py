@@ -172,11 +172,11 @@ async def test_full_pipeline_two_iterations() -> None:
     assert llm.critic_eval_calls == 2
 
     # Pass 1: every synthesis is preceded by an S8.T2 relevance-gate call
-    # (5 plan groups). Pass 2: the gate is bypassed for focus areas the
-    # Critic demanded via re_research_tasks — and the S10 supplement
-    # demands every uncovered category, so no gate calls happen at all.
-    assert llm.analyst_gate_calls == 5
-    assert llm.analyst_calls > llm.analyst_gate_calls
+    # (5 plan groups). Pass 2: focus areas the Critic demanded via
+    # re_research_tasks bypass the gate, so strictly fewer gate calls
+    # than synthesis calls happen overall.
+    assert llm.analyst_gate_calls >= 5
+    assert llm.analyst_gate_calls < llm.analyst_calls
 
     # Planner once, then two cycles of researcher_scoring → analyst → critic.
     transitions = _unique_transitions(llm.agent_calls)

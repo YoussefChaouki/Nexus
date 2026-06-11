@@ -273,13 +273,21 @@ class CriticAgent(AgentBase):
             return report
         covered = _covered_categories(surfaces) & set(applicable)
         coverage = round(len(covered) / len(applicable), 4)
+        # Always logged — the score drives the loop, so the breakdown must
+        # be observable on every pass, not only when the LLM disagreed.
+        self._logger.info(
+            "critic_coverage",
+            computed_coverage=coverage,
+            llm_score=report.overall_score,
+            covered=sorted(covered),
+            applicable=applicable,
+            surface_owasp=[s.owasp_category for s in surfaces],
+        )
         if abs(report.overall_score - coverage) > _SCORE_DIVERGENCE_WARN:
             self._logger.warning(
                 "critic_score_overridden",
                 llm_score=report.overall_score,
                 computed_coverage=coverage,
-                covered=sorted(covered),
-                applicable=applicable,
             )
 
         uncovered = [c for c in applicable if c not in covered]

@@ -592,6 +592,45 @@ async def test_analyst_keeps_on_target_group_when_gate_says_yes() -> None:
     assert out["threat_surfaces"][0].name == "Prompt Injection"
 
 
+async def test_analyst_defaults_null_owasp_from_focus_area() -> None:
+    """A null owasp_category on a mappable focus area gets the canonical code.
+
+    Production regression: GPT-4o reads infra-style threats (endpoint
+    flooding, SQL injection) as outside the OWASP *LLM* taxonomy and
+    returns null — the Critic's coverage score then can't credit the
+    surface and the loop freezes at a low score.
+    """
+    plan = [_task(FocusArea.DENIAL_OF_SERVICE, task_id="task-dos")]
+    findings = _strong_findings("task-dos")
+    llm = _FakeLLM(json.dumps(_surface_payload(name="Endpoint Flooding", owasp=None)))
+
+    out = await AnalystAgent(llm=llm).run(_state(plan=plan, findings=findings))
+
+    assert out["threat_surfaces"][0].owasp_category == "LLM04"
+
+
+async def test_analyst_keeps_explicit_owasp_category() -> None:
+    """An LLM-provided category must never be overwritten by the default."""
+    plan = [_task(FocusArea.INJECTION, task_id="task-inj")]
+    findings = _strong_findings("task-inj")
+    llm = _FakeLLM(json.dumps(_surface_payload(owasp="LLM02")))
+
+    out = await AnalystAgent(llm=llm).run(_state(plan=plan, findings=findings))
+
+    assert out["threat_surfaces"][0].owasp_category == "LLM02"
+
+
+async def test_analyst_other_focus_area_keeps_null_owasp() -> None:
+    """FocusArea.OTHER has no canonical category — null stays null."""
+    plan = [_task(FocusArea.OTHER, task_id="task-other")]
+    findings = _strong_findings("task-other")
+    llm = _FakeLLM(json.dumps(_surface_payload(name="Misc Threat", owasp=None)))
+
+    out = await AnalystAgent(llm=llm).run(_state(plan=plan, findings=findings))
+
+    assert out["threat_surfaces"][0].owasp_category is None
+
+
 async def test_analyst_gate_bypassed_for_critic_demanded_focus_area() -> None:
     """A focus area the Critic re-researched must never be gate-skipped.
 

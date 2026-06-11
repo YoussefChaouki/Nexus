@@ -65,6 +65,20 @@ _SEVERITY_ORDER: list[Severity] = [
 _MIN_EVIDENCE_FOR_FULL_BAND = 2
 _MIN_TOP_RELEVANCE_FOR_FULL_BAND = 0.6
 
+# Canonical OWASP LLM Top 10 category per focus area. Used as the
+# deterministic fallback when the LLM emits a null owasp_category for a
+# surface that plainly maps to one (an unauth DoS on an LLM service IS
+# LLM04) — the Critic's coverage score counts owasp_category fields, so
+# null surfaces silently freeze the feedback loop. OTHER stays None.
+_FOCUS_TO_OWASP: dict[FocusArea, str | None] = {
+    FocusArea.INJECTION: "LLM01",
+    FocusArea.DATA_LEAKAGE: "LLM06",
+    FocusArea.SUPPLY_CHAIN: "LLM05",
+    FocusArea.DENIAL_OF_SERVICE: "LLM04",
+    FocusArea.MODEL_EXTRACTION: "LLM10",
+    FocusArea.OTHER: None,
+}
+
 
 class AnalystAgent(AgentBase):
     """Synthesises FindingResult groups into ThreatSurface entries."""
@@ -278,6 +292,21 @@ class AnalystAgent(AgentBase):
         ranked = sorted(findings, key=lambda f: f.relevance_score, reverse=True)
         payload["evidence"] = [f.model_dump() for f in ranked]
 
+        # Deterministic OWASP fallback — GPT-4o reads infra-style threats
+        # (SQL injection, endpoint flooding) as outside the OWASP *LLM*
+        # taxonomy and returns null, which the Critic's coverage score
+        # then can't credit.
+        if not payload.get("owasp_category"):
+            default_owasp = _FOCUS_TO_OWASP.get(focus_area)
+            if default_owasp is not None:
+                payload["owasp_category"] = default_owasp
+                self._logger.info(
+                    "analyst_owasp_defaulted",
+                    session_id=state["session_id"],
+                    focus_area=focus_area.value,
+                    owasp_category=default_owasp,
+                )
+
         downgraded = _maybe_downgrade(payload, findings)
         if downgraded is not None:
             self._logger.info(
@@ -343,7 +372,13 @@ class AnalystAgent(AgentBase):
             "default to HIGH. If the evidence does not demonstrate impact at "
             "a band for THIS target, pick the lower one.\n"
             "Pick owasp_category from the OWASP LLM Top 10 (e.g. LLM01, "
-            "LLM02, LLM06, ...) when applicable; otherwise use null.\n"
+            "LLM02, LLM06, ...). Judge the threat IN THE CONTEXT of the LLM "
+            "service: an unauthenticated DoS on an LLM API is LLM04, data "
+            "exfiltration through the LLM context is LLM06. Default mapping "
+            "by focus area when nothing more specific applies: "
+            "injection→LLM01, data_leakage→LLM06, dos→LLM04, "
+            "supply_chain→LLM05, model_extraction→LLM10. Use null only when "
+            "no LLM-specific category fits at all.\n"
             "Return ONLY a JSON object with keys: name, description, "
             "severity, severity_reasoning, attack_vectors, mitigations, "
             "cvss_score (0-10 or null), owasp_category. "
