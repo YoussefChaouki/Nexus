@@ -441,20 +441,32 @@ Example 3 — MEDIUM
 
 
 def _other_owasp_hint(focus_area: FocusArea) -> str:
-    """Category guidance for the OTHER group, which has no canonical default.
+    """Category guidance for focus areas that collapse multiple OWASP codes.
 
     LLM02/07/08/09 all map to FocusArea.OTHER — without an explicit label
     from the LLM these surfaces stay null and the Critic's coverage score
     can never credit them, freezing the feedback loop below threshold.
+
+    LLM03 (training data poisoning) and LLM05 (supply chain vulnerabilities)
+    both map to FocusArea.SUPPLY_CHAIN, but the default-mapping sentence in
+    the prompt only ever mentions LLM05 — biasing the LLM toward LLM05 even
+    when the finding is specifically about poisoned training data.
     """
-    if focus_area is not FocusArea.OTHER:
-        return ""
-    return (
-        "For this 'other' focus area, choose the BEST-FITTING of: LLM02 "
-        "(insecure output handling), LLM07 (insecure plugin design), LLM08 "
-        "(excessive agency — autonomous tools, no human approval), LLM09 "
-        "(overreliance). "
-    )
+    if focus_area is FocusArea.OTHER:
+        return (
+            "For this 'other' focus area, choose the BEST-FITTING of: LLM02 "
+            "(insecure output handling), LLM07 (insecure plugin design), LLM08 "
+            "(excessive agency — autonomous tools, no human approval), LLM09 "
+            "(overreliance). "
+        )
+    if focus_area is FocusArea.SUPPLY_CHAIN:
+        return (
+            "For this 'supply_chain' focus area, use LLM03 (training data "
+            "poisoning) instead of the LLM05 default when the finding is "
+            "about corrupted/poisoned training or fine-tuning data rather "
+            "than a compromised dependency, artifact, or pipeline component. "
+        )
+    return ""
 
 
 def _maybe_downgrade(
