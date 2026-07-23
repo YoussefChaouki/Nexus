@@ -61,7 +61,7 @@ guardrails inchangés : APPROVE forcé à coverage ≥ 0.6 ou `max_iterations`).
 
 - Scoring et embeddings par finding via `asyncio.gather` sous `Semaphore(8)`.
 - `route_after_critic` lit `Settings.max_iterations` (le hardcode `_MAX_ITERATIONS = 3`
-  violait la convention CLAUDE.md).
+  violait la convention interne : env vars via `Settings`, jamais de constante en dur).
 - Nouveau `Settings.llm_temperature` (défaut 0.0) appliqué dans `AgentBase._get_llm()` —
   tous les agents parsent du JSON strict, le sampling par défaut ne faisait qu'ajouter des
   retries de validation.
