@@ -656,6 +656,21 @@ async def test_analyst_non_other_group_prompt_has_no_other_hint() -> None:
     assert "excessive agency" not in agent.last_prompts[0]
 
 
+async def test_analyst_supply_chain_prompt_hints_llm03_for_poisoning() -> None:
+    """LLM03 and LLM05 both map to SUPPLY_CHAIN — the prompt must nudge LLM03
+    for training-data-poisoning findings instead of defaulting to LLM05."""
+    plan = [_task(FocusArea.SUPPLY_CHAIN, task_id="task-sup")]
+    findings = _strong_findings("task-sup")
+    llm = _FakeLLM(json.dumps(_surface_payload(name="Training Data Poisoning", owasp="LLM03")))
+
+    agent = AnalystAgent(llm=llm)
+    out = await agent.run(_state(plan=plan, findings=findings))
+
+    assert "LLM03" in agent.last_prompts[0]
+    assert "training data poisoning" in agent.last_prompts[0].lower()
+    assert out["threat_surfaces"][0].owasp_category == "LLM03"
+
+
 async def test_analyst_gate_bypassed_for_critic_demanded_focus_area() -> None:
     """A focus area the Critic re-researched must never be gate-skipped.
 
