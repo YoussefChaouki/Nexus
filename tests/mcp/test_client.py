@@ -44,15 +44,16 @@ def _inject(client: MCPClient, server_name: str, session: _FakeSession) -> None:
 # --- get_server_for_tool / TOOL_REGISTRY ---------------------------------
 
 
-def test_tool_registry_covers_all_three_servers() -> None:
+def test_tool_registry_covers_all_servers() -> None:
     servers = set(TOOL_REGISTRY.values())
-    assert servers == {"arxiv", "nvd", "atlas"}
+    assert servers == {"arxiv", "nvd", "atlas", "code_analysis"}
 
 
 def test_get_server_for_tool_returns_server_name() -> None:
     assert get_server_for_tool("search_papers") == "arxiv"
     assert get_server_for_tool("search_cves") == "nvd"
     assert get_server_for_tool("search_techniques") == "atlas"
+    assert get_server_for_tool("analyze_dependencies") == "code_analysis"
 
 
 def test_get_server_for_tool_returns_none_for_unknown_tool() -> None:
