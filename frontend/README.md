@@ -4,9 +4,8 @@ Next.js 14 frontend for the NEXUS multi-agent threat-surface analyzer.
 
 Aesthetic: **threat intel terminal**. Dark-only, monospace-only (JetBrains Mono),
 hairlines instead of cards-with-shadows, zero border-radius, dense rows in
-generous negative space. Tokens come from
-[`/tmp/nexus_design/nexus/project/Design System.html`](../) (Claude Design
-handoff bundle) and live in `tailwind.config.ts` + `app/globals.css`.
+generous negative space. Design tokens live in `tailwind.config.ts` +
+`app/globals.css`.
 
 ## Pages
 
@@ -110,8 +109,8 @@ keeping the design system's "one hue per agent" rule.
   empty-state. One small async function on `EpisodicMemory` and a route in
   `src/nexus/api/main.py` will unblock it.
 - The persisted summary intentionally omits per-surface evidence and
-  mitigations (see CLAUDE.md: episodic stores `ThreatReportSummary`, not the
-  full report). The "Top attack vectors" section therefore renders flat
+  mitigations (by design: episodic memory stores `ThreatReportSummary`, not
+  the full report). The "Top attack vectors" section therefore renders flat
   rows; if a `GET /reports/{id}/full` endpoint is added later, swap
   `SurfaceList` for a richer renderer over `ThreatSurface[]`.
 - Auth: none yet. The current backend has no auth either; both will need
