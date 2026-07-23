@@ -21,6 +21,10 @@ TOOL_REGISTRY: Final[dict[str, str]] = {
     "search_techniques": "atlas",
     "get_technique_detail": "atlas",
     "search_by_tactic": "atlas",
+    # Code Analysis — see mcp_servers/code_analysis/server.py (S9.T3 stretch)
+    "analyze_dependencies": "code_analysis",
+    "detect_patterns": "code_analysis",
+    "extract_attack_surface": "code_analysis",
 }
 
 

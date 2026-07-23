@@ -217,6 +217,18 @@ Rate limit : 5/s sans clé, 50/s avec `NVD_API_KEY`. Toujours utiliser `Retry-Af
 Dataset : `data/atlas/ATLAS.json` (STIX 2.1, téléchargé à setup).
 Embeddings pre-computed sur `technique.description` au démarrage du server.
 
+### Code Analysis MCP (`mcp_servers/code_analysis/server.py`) — stretch goal S9.T3, complété
+| Tool | Params | Source |
+|------|--------|--------|
+| `analyze_dependencies` | `requirements_content: str` | requirements.txt / pyproject.toml → nvd.nist.gov REST API v2 |
+| `detect_patterns` | `code_content: str, language: str = "python"` | subprocess `semgrep --config=auto` |
+| `extract_attack_surface` | `config_content: str, config_type: str` | docker-compose / kubernetes / openapi (YAML/JSON) / terraform (regex heuristics) |
+
+Package self-contenu (pas d'import croisé avec `mcp_servers/nvd` — client NVD
+minimal dupliqué volontairement, même convention que les 3 autres servers).
+`semgrep` est un binaire externe (pas une dépendance Python) — voir
+`mcp_servers/code_analysis/README.md` pour le setup.
+
 ---
 
 ## Memory Layer
