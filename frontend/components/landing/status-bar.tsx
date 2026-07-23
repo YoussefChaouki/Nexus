@@ -34,7 +34,7 @@ export function LandingStatusBar() {
       </Item>
       <Sep />
       <Item>
-        MODEL <strong className="text-fg-muted font-medium ml-[6px]">claude-opus-4-7</strong>
+        MODEL <strong className="text-fg-muted font-medium ml-[6px]">gpt-4o</strong>
       </Item>
       <Sep />
       <Item>
