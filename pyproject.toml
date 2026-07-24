@@ -23,6 +23,7 @@ dependencies = [
     "httpx>=0.27",
     "tenacity>=8.3",
     "tiktoken>=0.7",
+    "numpy>=1.26",  # mcp_servers/atlas runs via sys.executable in this same env
 ]
 
 [project.optional-dependencies]

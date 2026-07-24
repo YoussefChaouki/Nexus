@@ -27,6 +27,7 @@ from mcp.client.stdio import stdio_client
 from mcp.types import CallToolResult
 
 from nexus.exceptions import MCPClientError
+from nexus.settings import get_settings
 
 logger = structlog.get_logger(__name__)
 
@@ -160,9 +161,18 @@ def _maybe_raise_envelope(server_name: str, tool_name: str, text: str) -> None:
 
 
 def _default_server_configs() -> dict[str, StdioServerParameters]:
-    """Default stdio launchers pointing at the bundled mcp_servers/ scripts."""
-    repo_root = Path(__file__).resolve().parents[3]
-    servers_dir = repo_root / "mcp_servers"
+    """Default stdio launchers pointing at the bundled mcp_servers/ scripts.
+
+    ``Settings.mcp_servers_dir`` takes precedence when set (required for a
+    non-editable install, e.g. the Docker image, where this file lives
+    under site-packages and no longer sits 3 parents below the repo root).
+    """
+    configured = get_settings().mcp_servers_dir
+    if configured:
+        servers_dir = Path(configured)
+    else:
+        repo_root = Path(__file__).resolve().parents[3]
+        servers_dir = repo_root / "mcp_servers"
     return {
         name: StdioServerParameters(
             command=sys.executable,

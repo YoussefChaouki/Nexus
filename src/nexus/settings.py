@@ -42,6 +42,14 @@ class Settings(BaseSettings):
     researcher_min_relevance: float = 0.5
     researcher_min_context_relevance: float = 0.35
 
+    # Directory containing the bundled MCP server scripts (arxiv/nvd/atlas/
+    # code_analysis), each launched as a stdio subprocess. None falls back
+    # to a path guess relative to this package — only valid for an editable
+    # / dev-mode install (e.g. `make dev`). A non-editable `pip install .`
+    # (the Docker image) copies this package into site-packages, breaking
+    # that guess — set explicitly there.
+    mcp_servers_dir: str | None = None
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 
