@@ -22,36 +22,58 @@ deterministically-computed threshold.
 
 A single "you are a security expert" prompt produces plausible-sounding but
 shallow threat models: no evidence, flat severity, and whatever OWASP
-categories the model happens to remember. NEXUS splits the job:
+categories the model happens to remember. NEXUS splits the job across five
+LangGraph nodes sharing one typed `AgentState`, with a bounded feedback loop
+between Critic and Researcher:
 
-```
-target_description
-        ↓
-  ┌─────────────┐
-  │   Planner   │  decomposes the target into 4-6 focused research tasks
-  └──────┬──────┘
-         ↓
-  ┌─────────────┐  ←──────────────────────────────────┐
-  │ Researcher  │  pulls live evidence from arXiv,     │
-  └──────┬──────┘  NVD and MITRE ATLAS (MCP servers)   │
-         ↓                                             │  re-research
-  ┌─────────────┐                                      │  the gaps
-  │   Analyst   │  synthesizes ThreatSurfaces with     │  (max 3 passes)
-  └──────┬──────┘  rubric-calibrated severity          │
-         ↓                                             │
-  ┌─────────────┐  coverage < 0.6 ──────────────────────┘
-  │   Critic    │  scores OWASP coverage *in code*, not by LLM arithmetic
-  └──────┬──────┘
-         ↓ coverage ≥ 0.6 (or max passes)
-  ┌─────────────┐
-  │   Writer    │  assembles the final ThreatReport + episodic summary
-  └─────────────┘
+```mermaid
+flowchart TD
+    T["target_description"] --> P["Planner<br/>4-6 ResearchTask, grounded in<br/>similar past runs (episodic memory)"]
+    P --> R["Researcher<br/>fans out to MCP servers"]
+    R --> A["Analyst<br/>synthesizes ThreatSurfaces,<br/>rubric-calibrated severity"]
+    A --> C{"Critic<br/>OWASP coverage ≥ 0.6?"}
+    C -- "no · iteration < 3<br/>re_research_tasks for the gaps" --> R
+    C -- "yes · or max_iterations hit" --> W["Writer<br/>assembles ThreatReport"]
+    W --> TR(["ThreatReport"])
 ```
 
 Every finding cites a real identifier (`CVE-…`, `arxiv:…`, `AML.T…`) fetched
 at analysis time — the LLM never invents evidence. The Critic recomputes its
 coverage score deterministically from the surfaces' OWASP categories, so the
 feedback loop is driven by arithmetic, not by a model grading its own homework.
+
+See [docs/WALKTHROUGH.md](docs/WALKTHROUGH.md) for a real run traced
+node-by-node, including a re-research pass triggered by a low coverage score.
+
+### Evidence sources and memory
+
+```mermaid
+flowchart LR
+    subgraph mcp["MCP servers (stdio subprocesses)"]
+        ARX["arXiv<br/>search_papers"]
+        NVD["NVD<br/>search_cves"]
+        ATL["MITRE ATLAS*<br/>search_techniques"]
+        CA["Code Analysis<br/>analyze_dependencies<br/>detect_patterns<br/>extract_attack_surface"]
+    end
+    subgraph memory["Memory"]
+        WM[("Redis<br/>working / checkpointer")]
+        EP[("pgvector<br/>episodic: past ThreatReportSummary")]
+        SM[("pgvector<br/>semantic: ATLAS/OWASP patterns<br/>(read-only)")]
+    end
+    Researcher --> ARX
+    Researcher --> NVD
+    Researcher --> ATL
+    Planner -. "similarity search" .-> EP
+    Analyst -. "pattern lookup" .-> SM
+    Writer -. "persists summary" .-> EP
+```
+
+\* MITRE dropped the STIX 2.1 JSON feed this server was built against in
+favor of a YAML format — `search_techniques` currently returns no results
+until `stix_loader.py` is ported to it (degrades gracefully, doesn't crash
+the run). `Code Analysis` is registered and independently testable but not
+yet wired into the Researcher's automatic fan-out — call it directly via
+its MCP tools for now.
 
 ## Evaluation — NEXUS vs a single prompt
 
@@ -90,9 +112,11 @@ defaulting to HIGH.
   (working), pgvector episodic store of past report summaries (the Planner
   retrieves similar architectures), and a read-only pgvector semantic library
   of ATLAS/OWASP patterns ingested by `scripts/ingest_patterns.py`.
-- **MCP servers** (`mcp_servers/`) — three standalone stdio processes
-  (arXiv, NVD, MITRE ATLAS) speaking the Model Context Protocol, each with
-  rate limiting, retries, and typed Pydantic envelopes.
+- **MCP servers** (`mcp_servers/`) — four standalone stdio processes (arXiv,
+  NVD, MITRE ATLAS, Code Analysis) speaking the Model Context Protocol, each
+  with its own `pyproject.toml`, rate limiting/retries where relevant, and
+  typed Pydantic envelopes. The Researcher fans out to the first three;
+  Code Analysis is available but not yet in that automatic loop.
 - **Observability** — every LLM call carries a Langfuse callback with a
   shared metadata vocabulary (`agent`, `iteration`, `step`, `session_id`);
   structured logs (`structlog`) expose per-pass coverage breakdowns.
@@ -128,7 +152,7 @@ src/nexus/
 ├── observability/   Langfuse handler factory
 ├── schemas/         Pydantic models — single source of truth
 └── api/             FastAPI app
-mcp_servers/         arxiv/ · nvd/ · atlas/   (standalone MCP processes)
+mcp_servers/         arxiv/ · nvd/ · atlas/ · code_analysis/   (standalone MCP processes)
 frontend/            Next.js 14 terminal UI
 tests/eval/          benchmark harness + baseline comparison
 docs/adr/            architecture decision records
