@@ -8,24 +8,31 @@
 
 NEXUS est une application Python 3.11+ async composée de plusieurs processus :
 
+```mermaid
+flowchart TB
+    APP["nexus app (FastAPI + LangGraph)<br/>POST /analyze · GET /analyze/stream (SSE)"]
+    subgraph stdio["stdio subprocesses"]
+        ARX["MCP arXiv"]
+        NVD["MCP NVD"]
+        ATL["MCP ATLAS*"]
+        CA["MCP Code Analysis†"]
+    end
+    REDIS[("Redis<br/>working")]
+    PG[("pgvector<br/>episodic + semantic")]
+    LF["Langfuse<br/>(external SaaS)"]
+
+    APP --> ARX
+    APP --> NVD
+    APP --> ATL
+    APP -.-> CA
+    APP --> REDIS
+    APP --> PG
+    APP --> LF
 ```
-┌─────────────────────────────────────────────────┐
-│  nexus app (FastAPI + LangGraph)                │
-│  ├── POST /analyze                              │
-│  └── GET /analyze/stream (SSE)                 │
-└──────────────────┬──────────────────────────────┘
-                   │ stdio
-       ┌───────────┼───────────┐
-       ↓           ↓           ↓
-  MCP arXiv    MCP NVD    MCP ATLAS
-  (process)   (process)  (process)
-       
-       ┌───────────┬───────────┐
-       ↓           ↓           ↓
-    Redis       pgvector    Langfuse
-  (working)   (episodic    (external
-              +semantic)     SaaS)
-```
+
+\* dataset STIX 2.1 JSON obsolète côté MITRE (migré vers YAML) — dégrade
+proprement (0 résultat), pas de crash. † serveur enregistré et testable
+indépendamment, pas encore câblé dans le fan-out automatique du Researcher.
 
 ---
 
@@ -216,6 +223,12 @@ Rate limit : 5/s sans clé, 50/s avec `NVD_API_KEY`. Toujours utiliser `Retry-Af
 
 Dataset : `data/atlas/ATLAS.json` (STIX 2.1, téléchargé à setup).
 Embeddings pre-computed sur `technique.description` au démarrage du server.
+
+**⚠ Statut (2026-07) :** MITRE a retiré le flux STIX 2.1 JSON du dépôt
+`atlas-data` au profit d'un format YAML — l'URL de téléchargement documentée
+ci-dessus ne résout plus. `search_techniques` renvoie donc 0 résultat tant
+que `stix_loader.py` n'est pas réécrit pour le nouveau schéma ; le serveur
+dégrade proprement (pas de crash), le Researcher continue avec arXiv + NVD.
 
 ### Code Analysis MCP (`mcp_servers/code_analysis/server.py`) — stretch goal S9.T3, complété
 | Tool | Params | Source |

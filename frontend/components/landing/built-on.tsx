@@ -16,7 +16,7 @@ const ORCHESTRATION: Chip[] = [
 
 const MEMORY_TOOLS: Chip[] = [
   { k: "pgvector", v: "1536-dim" },
-  { k: "mcp", v: "3 servers" },
+  { k: "mcp", v: "4 servers" },
   { k: "langfuse", v: "traces" },
   { k: "openai", v: "gpt-4o" },
   { k: "anthropic", v: "fallback" },
