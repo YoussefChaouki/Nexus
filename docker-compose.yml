@@ -43,6 +43,10 @@ services:
       # postgres/redis siblings.
       REDIS_URL: redis://redis:6379
       POSTGRES_DSN: postgresql+asyncpg://nexus:nexus@postgres:5432/nexus
+      # `pip install .` (this image) copies nexus/ into site-packages, so
+      # the dev-mode path guess in _default_server_configs() no longer
+      # resolves to the repo root — point it at the bundled scripts below.
+      MCP_SERVERS_DIR: /app/mcp_servers
     depends_on:
       postgres:
         condition: service_healthy
