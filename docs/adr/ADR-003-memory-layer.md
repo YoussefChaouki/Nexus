@@ -18,11 +18,10 @@ Redis est justifié (pas juste un dict) parce que :
 - Survit au redémarrage du process (recovery)
 - Shared entre instances (scalabilité future)
 - LangGraph a un RedisSaver natif
-- Talking point en entretien : "j'ai implémenté un checkpointer distribué"
 
 ## Mem0 vs custom
 
-Mem0 est rejeté. "J'ai architecturé un memory layer à 3 niveaux" est une réponse d'entretien. "J'ai utilisé Mem0" ne l'est pas. Le custom donne du contrôle, de la transparence, et des talking points.
+Mem0 est rejeté. Une couche mémoire custom à 3 niveaux donne du contrôle et de la transparence sur ce qui est stocké, retrouvé et pourquoi ; une dépendance externe masquerait ces choix.
 
 ## Mémoire épisodique : ThreatReportSummary, pas ThreatReport complet
 

@@ -4,15 +4,15 @@
 
 ## Décision
 
-3 MCP servers custom, sélectionnés pour maximiser la valeur perçue en entretien et l'utilité réelle pour le cas d'usage. Web scraping MCP générique rejeté.
+3 MCP servers custom, sélectionnés pour leur utilité réelle pour le cas d'usage. Web scraping MCP générique rejeté.
 
 ## Servers retenus
 
-| Server | Justification | Unicité portfolio |
-|--------|---------------|-------------------|
-| arXiv | Recherche académique en temps réel — aucun LLM n'a les papers récents | Rare dans les portfolios ML |
-| NVD/CVE | Données CVE factuelles — grounding obligatoire (zéro hallucination tolérée) | Montre la maîtrise des APIs de sécurité |
-| MITRE ATLAS | Référentiel AI-specific unique — connecte directement à ThreatRAG | Démontre la connaissance du domaine AI Security |
+| Server | Justification | Apport |
+|--------|---------------|--------|
+| arXiv | Recherche académique en temps réel — aucun LLM n'a les papers récents | Papers plus récents que le cutoff du modèle |
+| NVD/CVE | Données CVE factuelles — grounding obligatoire (zéro hallucination tolérée) | Identifiants CVE vérifiables |
+| MITRE ATLAS | Référentiel AI-specific unique — connecte directement à ThreatRAG | Taxonomie propre aux attaques sur systèmes d'IA |
 
 ## Servers rejetés
 
@@ -29,7 +29,7 @@ Chaque server est un processus Python standalone (stdio transport). Cette approc
 - Plus robuste (crash isolation)
 - Scalable (plusieurs workers possibles)
 - Conforme au MCP standard
-- Démontrable séparément en entretien
+- Testable et démontrable séparément
 
 ## Connexion depuis les agents
 

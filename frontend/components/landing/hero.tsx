@@ -6,7 +6,7 @@ export function LandingHero() {
       <div className="flex gap-[14px] mb-ds-6 text-[10.5px] uppercase tracking-[0.14em] text-fg-faint flex-wrap">
         <Meta label="STATUS" value="● online" valueClass="text-accent" />
         <Meta label="BUILD" value="v0.7.1" />
-        <Meta label="STAGE" value="portfolio · beta" />
+        <Meta label="STAGE" value="beta" />
         <Meta label="DOMAIN" value="ai security" />
       </div>
 
