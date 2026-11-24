@@ -92,7 +92,8 @@ class MCPClient:
         result = await session.call_tool(tool_name, arguments=kwargs)
         text = _extract_text(result)
 
-        if result.isError:
+        # The MCP SDK renamed ``isError`` to ``is_error`` in 2.x; accept both.
+        if bool(getattr(result, "is_error", getattr(result, "isError", False))):
             raise MCPClientError(f"MCP transport error from {server_name}.{tool_name}: {text}")
 
         _maybe_raise_envelope(server_name, tool_name, text)
