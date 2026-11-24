@@ -1,6 +1,6 @@
 # NEXUS — Product Requirements Document
 
-**Version:** 1.0 | **Statut:** Approved | **Owner:** Portfolio ML Engineer
+**Version:** 1.0 | **Statut:** Approved | **Owner:** Youssef Chaouki
 
 ---
 
@@ -8,7 +8,7 @@
 
 NEXUS produit automatiquement des threat models structurés pour des systèmes AI. Donné une description en langage naturel d'une architecture AI, NEXUS orchestre 5 agents spécialisés pour rechercher les vecteurs d'attaque, synthétiser les preuves, valider la complétude, et livrer un `ThreatReport` actionnable.
 
-**Positionnement portfolio :** NEXUS démontre la maîtrise de multi-agent orchestration, persistent memory, MCP, et LLM observability — les keywords exacts ciblant Anthropic / OpenAI / DeepMind / NVIDIA Security.
+**Périmètre technique :** orchestration multi-agent, mémoire persistante, MCP et observabilité LLM, appliqués à la sécurité des systèmes d'IA.
 
 ---
 

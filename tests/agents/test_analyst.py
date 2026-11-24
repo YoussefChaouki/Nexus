@@ -456,7 +456,7 @@ async def test_analyst_prompt_includes_severity_rubric_and_examples() -> None:
 
 
 async def test_analyst_distribution_not_flat_on_s7_failure_case() -> None:
-    """Regression: the S7 portfolio review showed 6/6 surfaces all HIGH.
+    """Regression: the S7 review showed 6/6 surfaces all HIGH.
 
     Feed the same target with mock evidence shaped to elicit at least two
     distinct severity bands. The Analyst (with downgrade) MUST produce a

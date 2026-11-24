@@ -4,7 +4,7 @@
 
 ## Contexte
 
-Le portfolio review du sprint S7 a exposé un cas où l'Analyst synthétisait une ThreatSurface *"Exploitation of vulnerabilities in payment and financial systems like M-Banking"* sur une cible RAG/pgvector (l'incident M-Banking). Le Researcher remontait un CVE générique mobile-banking, l'Analyst le gardait, le rapport finissait par mentionner une menace qui n'a rien à voir avec la cible.
+La revue du sprint S7 a exposé un cas où l'Analyst synthétisait une ThreatSurface *"Exploitation of vulnerabilities in payment and financial systems like M-Banking"* sur une cible RAG/pgvector (l'incident M-Banking). Le Researcher remontait un CVE générique mobile-banking, l'Analyst le gardait, le rapport finissait par mentionner une menace qui n'a rien à voir avec la cible.
 
 Cause racine :
 

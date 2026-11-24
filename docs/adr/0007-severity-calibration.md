@@ -33,7 +33,7 @@ Un nouveau champ optionnel `severity_reasoning: str | None` est ajouté à `Thre
 
 **Alternative considérée :** drop du champ avant validation. Rejeté car :
 
-- la justification est un signal d'audit précieux pour le Critic (S5.T2) et pour la review portfolio.
+- la justification est un signal d'audit précieux pour le Critic (S5.T2) et pour la relecture des rapports.
 - ajouter un champ optionnel ne casse aucune compatibilité descendante (les anciens reports en mémoire épisodique restent valides).
 - l'overhead JSON est négligeable.
 

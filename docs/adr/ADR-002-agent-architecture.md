@@ -4,7 +4,7 @@
 
 ## Contexte
 
-Justifier 5 agents distincts (et non un pipeline linéaire ou un seul agent) devant un interviewer technique. L'architecture doit démontrer que le multi-agent ajoute de la valeur mesurable vs un RAG single-prompt.
+Justifier 5 agents distincts (et non un pipeline linéaire ou un seul agent). L'architecture doit démontrer que le multi-agent ajoute de la valeur mesurable vs un RAG single-prompt.
 
 ## Décision
 

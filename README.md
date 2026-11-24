@@ -13,9 +13,6 @@ mitigations. Five specialized agents research, synthesize, and *criticize*
 the analysis in a feedback loop until coverage crosses an objective,
 deterministically-computed threshold.
 
-![Demo](docs/demo.gif)
-*(demo GIF coming — run `make dev` + the Next.js frontend for the live version)*
-
 ---
 
 ## Why multi-agent?

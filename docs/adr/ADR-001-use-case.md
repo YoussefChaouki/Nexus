@@ -2,13 +2,13 @@
 
 **Date :** Phase 0  
 **Statut :** Accepted  
-**Décideurs :** Portfolio owner
+**Décideurs :** Youssef Chaouki
 
 ---
 
 ## Contexte
 
-NEXUS est un système multi-agent portfolio. Le cas d'usage doit démontrer la valeur du multi-agent (pas juste un RAG amélioré), être différenciant pour les cibles (Anthropic, OpenAI, DeepMind, NVIDIA Security), et s'intégrer dans l'arc AI Security du portfolio.
+NEXUS est un système multi-agent. Le cas d'usage doit démontrer la valeur du multi-agent (pas juste un RAG amélioré) et s'intégrer dans l'arc AI Security (NEXUS → ThreatRAG → RedTeamForge).
 
 ## Décision
 
@@ -28,7 +28,7 @@ NEXUS implémente **AI Vulnerability Intelligence** : donné une description d'a
 **Positives :**
 - Arc narratif cohérent : NEXUS (research) → ThreatRAG (map) → RedTeamForge (exec)
 - Agents ont des rôles distincts et défendables : Planner décompose en FocusArea, Researcher ground les données factuelles, Critic évalue contre checklist OWASP/ATLAS
-- MCP servers uniques dans les portfolios ML : arXiv + NVD + MITRE ATLAS
+- Sources de preuves spécialisées via MCP : arXiv + NVD + MITRE ATLAS
 - Demo story tangible : "Je donne CITADEL à NEXUS → il identifie 7 attack surfaces avec CVE references"
 
 **Négatives :**
